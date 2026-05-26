@@ -1,0 +1,218 @@
+:root {
+  color: #f5f7fb;
+  background: transparent;
+  font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: transparent;
+}
+
+button,
+select {
+  font: inherit;
+}
+
+.shell {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  user-select: none;
+}
+
+.drag-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border: 0;
+  background: transparent;
+  cursor: grab;
+}
+
+.drag-layer:active {
+  cursor: grabbing;
+}
+
+.pet-stage {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  filter: drop-shadow(0 12px 18px rgba(0, 0, 0, 0.24));
+}
+
+.pet-canvas {
+  display: block;
+  width: auto;
+  height: auto;
+}
+
+.caption {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  z-index: 3;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  transform: translateX(-50%);
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: rgba(11, 13, 18, 0.58);
+  backdrop-filter: blur(12px);
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 12px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.caption span {
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.menu-dot {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 4;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  background: rgba(12, 14, 18, 0.6);
+  cursor: pointer;
+}
+
+.menu-dot span,
+.menu-dot::before,
+.menu-dot::after {
+  content: "";
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.88);
+}
+
+.menu-dot {
+  gap: 3px;
+}
+
+.panel {
+  position: absolute;
+  top: 48px;
+  right: 12px;
+  z-index: 5;
+  width: min(280px, calc(100vw - 24px));
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: rgba(15, 17, 23, 0.9);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(18px);
+}
+
+.panel-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.panel-head div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.panel-head strong {
+  font-size: 14px;
+}
+
+.panel-head span {
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.56);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panel-head button,
+.controls button,
+.wide {
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.92);
+  cursor: pointer;
+}
+
+.panel-head button {
+  width: 28px;
+  height: 28px;
+}
+
+.field {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 10px;
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 12px;
+}
+
+.field select {
+  width: 100%;
+  min-height: 34px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 7px;
+  background: #191c24;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.controls {
+  display: grid;
+  grid-template-columns: 38px 1fr 38px;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.controls button {
+  height: 34px;
+}
+
+.controls span {
+  text-align: center;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 13px;
+}
+
+.wide {
+  width: 100%;
+  min-height: 34px;
+  margin-top: 8px;
+}
+
+.danger {
+  border-color: rgba(255, 105, 105, 0.36);
+  color: #ffb6b6;
+}
+
+.error {
+  margin: 10px 0 0;
+  color: #ffb6b6;
+  font-size: 12px;
+  line-height: 1.4;
+}

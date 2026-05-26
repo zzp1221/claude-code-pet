@@ -1,0 +1,13 @@
+{
+  "activePetId": "hiyue",
+  "petSources": [
+    "%USERPROFILE%\\.codex\\pets",
+    "%USERPROFILE%\\.claude\\pet-companion\\pets"
+  ],
+  "window": {
+    "x": null,
+    "y": null,
+    "scale": 1,
+    "alwaysOnTop": true
+  }
+}

@@ -1,0 +1,21 @@
+[package]
+name = "claude-pet-companion"
+version = "0.1.0"
+description = "Desktop pet companion driven by Claude Code hooks"
+authors = ["ASUS"]
+edition = "2021"
+
+[lib]
+name = "claude_pet_companion_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.5.1", features = [] }
+
+[dependencies]
+base64 = "0.22.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tauri = { version = "2.11.0", features = [] }
+tauri-plugin-dialog = "2.7.1"
+tauri-plugin-opener = "2.5.0"
