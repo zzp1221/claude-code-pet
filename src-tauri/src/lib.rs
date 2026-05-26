@@ -110,6 +110,10 @@ fn claude_commands_dir() -> Result<PathBuf, String> {
     Ok(home_dir()?.join(".claude/commands"))
 }
 
+fn claude_skills_dir() -> Result<PathBuf, String> {
+    Ok(home_dir()?.join(".claude/skills"))
+}
+
 fn backup_path(label: &str) -> Result<PathBuf, String> {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -305,6 +309,7 @@ fn install_hooks_inner() -> Result<(), String> {
     write_json_file(&settings_path, &settings)?;
     write_state_inner("idle", "installed", 0, None)?;
     install_pet_command_inner()?;
+    install_pet_skill_inner()?;
     Ok(())
 }
 
@@ -332,6 +337,10 @@ fn uninstall_hooks_inner() -> Result<(), String> {
     if command_path.is_file() {
         let _ = fs::remove_file(command_path);
     }
+    let skill_dir = claude_skills_dir()?.join("claude-pet-companion");
+    if skill_dir.is_dir() {
+        let _ = fs::remove_dir_all(skill_dir);
+    }
     Ok(())
 }
 
@@ -341,18 +350,128 @@ fn install_pet_command_inner() -> Result<(), String> {
     let exe = current_exe_path()?;
     let command = format!(
         r#"---
-description: Launch or focus the Claude Pet Companion desktop pet.
-allowed-tools: Bash({} *)
+description: Launch/focus Claude Pet Companion, or create/import a recognizable desktop pet when arguments are provided.
+argument-hint: [pet description | import <folder> | switch <pet-id>]
+allowed-tools: Bash({} *), Read, Write, Edit, MultiEdit, Glob, Grep, LS
 ---
 
 !{} --launch --state waving --event slash-command --ttl-ms 3000
 
-Claude Pet Companion has been launched.
+Arguments: $ARGUMENTS
+
+If `Arguments` is empty, tell the user that Claude Pet Companion has been launched.
+
+If `Arguments` is not empty, treat it as a Claude Pet Companion request. Follow the installed skill at `~/.claude/skills/claude-pet-companion/SKILL.md`.
+
+Common intents:
+- `import <folder>`: validate the folder contains `pet.json` and `spritesheet.webp`, then run `{exe} --import-pet "<folder>"`.
+- `switch <pet-id>`: run `{exe} --set-pet <pet-id> --launch --state waving --event pet-switched --ttl-ms 3000`.
+- Any mascot or character description: create a Codex-compatible pet package that this companion can recognize, then import it with `{exe} --import-pet "<package-folder>"`.
 "#,
         path_text(&exe),
-        command_arg(&exe)
+        command_arg(&exe),
+        exe = command_arg(&exe)
     );
     fs::write(command_dir.join("pet.md"), command).map_err(|error| error.to_string())?;
+    install_pet_skill_inner()?;
+    Ok(())
+}
+
+fn install_pet_skill_inner() -> Result<(), String> {
+    let skill_dir = claude_skills_dir()?.join("claude-pet-companion");
+    fs::create_dir_all(&skill_dir).map_err(|error| error.to_string())?;
+    let exe = current_exe_path()?;
+    let skill = format!(
+        r#"---
+name: claude-pet-companion
+description: Create, validate, import, switch, and manage Claude Pet Companion desktop pets. Use when the user invokes /pet with a description, asks to make a recognizable desktop pet, imports a Codex-compatible pet package, or wants Claude Code to control the pet companion.
+---
+
+# Claude Pet Companion Skill
+
+Use this skill when `/pet` includes arguments or when the user asks Claude Code to create, import, switch, or manage a desktop pet for Claude Pet Companion.
+
+## Companion CLI
+
+Use the installed executable:
+
+```powershell
+{exe}
+```
+
+Useful commands:
+
+```powershell
+{exe} --launch --state waving --event slash-command --ttl-ms 3000
+{exe} --import-pet "<absolute pet package folder>"
+{exe} --set-pet <pet-id> --launch --state waving --event pet-switched --ttl-ms 3000
+```
+
+## Recognizable Pet Package Contract
+
+A package is recognized by the companion when it is a folder containing:
+
+```text
+pet.json
+spritesheet.webp
+```
+
+`pet.json` must contain:
+
+```json
+{{
+  "id": "lowercase-id",
+  "displayName": "Display Name",
+  "description": "Short description",
+  "spritesheetPath": "spritesheet.webp"
+}}
+```
+
+The spritesheet must be `1536x1872`, arranged as 8 columns x 9 rows, with `192x208` cells.
+
+Rows:
+0. `idle`
+1. `running-right`
+2. `running-left`
+3. `waving`
+4. `jumping`
+5. `failed`
+6. `waiting`
+7. `running`
+8. `review`
+
+## Workflow For `/pet <description>`
+
+1. Treat the arguments as the pet concept unless they clearly request `import` or `switch`.
+2. Choose a short lowercase `id`, a display name, and a one-sentence description.
+3. Create or obtain a complete 8x9 `spritesheet.webp` for all supported states.
+4. Write `pet.json` next to the spritesheet.
+5. Validate that both files exist and that the manifest points to `spritesheet.webp`.
+6. Run `{exe} --import-pet "<package-folder>"`.
+7. Tell the user the pet is installed and can be selected from the companion menu.
+
+If image generation is not available in the current Claude Code environment, ask the user for an existing spritesheet or reference package instead of fabricating one.
+
+## Workflow For `/pet import <folder>`
+
+1. Resolve the folder path.
+2. Confirm `pet.json` and its referenced spritesheet exist.
+3. Run `{exe} --import-pet "<folder>"`.
+4. Report the imported pet id and display name.
+
+## Workflow For `/pet switch <pet-id>`
+
+Run:
+
+```powershell
+{exe} --set-pet <pet-id> --launch --state waving --event pet-switched --ttl-ms 3000
+```
+
+If the pet id is unknown, inspect `~/.codex/pets` and `~/.claude/pet-companion/pets`.
+"#,
+        exe = command_arg(&exe)
+    );
+    fs::write(skill_dir.join("SKILL.md"), skill).map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -537,6 +656,54 @@ fn run_hook(args: &[String]) -> Result<(), String> {
     write_state_inner(&state, &event, ttl_ms, extra)
 }
 
+fn import_pet_package_inner(source: &Path, activate: bool) -> Result<PetInfo, String> {
+    let pet = read_manifest(source)?;
+    let companion = companion_dir()?;
+    let target = companion.join("pets").join(&pet.id);
+    if target.exists() {
+        fs::remove_dir_all(&target).map_err(|error| error.to_string())?;
+    }
+    fs::create_dir_all(&target).map_err(|error| error.to_string())?;
+    fs::copy(&pet.spritesheet_path, target.join("spritesheet.webp"))
+        .map_err(|error| error.to_string())?;
+    let normalized_manifest = json!({
+        "id": pet.id,
+        "displayName": pet.display_name,
+        "description": pet.description,
+        "spritesheetPath": "spritesheet.webp"
+    });
+    write_json_file(&target.join("pet.json"), &normalized_manifest)?;
+
+    let imported = read_manifest(&target)?;
+    if activate {
+        let mut config = read_config_inner()?;
+        config.active_pet_id = imported.id.clone();
+        write_config_inner(&config)?;
+    }
+    write_state_inner(
+        "review",
+        "pet-imported",
+        3000,
+        Some(json!({
+            "petId": imported.id,
+            "displayName": imported.display_name
+        })),
+    )?;
+    Ok(imported)
+}
+
+fn set_active_pet_inner(id: &str) -> Result<(), String> {
+    let config = read_config_inner()?;
+    let pets = list_pets_inner(&config);
+    if !pets.iter().any(|pet| pet.id == id) {
+        return Err(format!("Unknown pet id: {id}"));
+    }
+    let mut next = config;
+    next.active_pet_id = id.to_string();
+    write_config_inner(&next)?;
+    write_state_inner("waving", "pet-switched", 3000, Some(json!({ "petId": id })))
+}
+
 fn launch_existing_or_new(args: &[String]) -> Result<(), String> {
     let state = arg_value(args, "--state").unwrap_or_else(|| "waving".to_string());
     let event = arg_value(args, "--event").unwrap_or_else(|| "launch".to_string());
@@ -564,6 +731,17 @@ fn run_cli(args: &[String]) -> Result<bool, String> {
     }
     if args.iter().any(|arg| arg == "--hook") {
         run_hook(args)?;
+        return Ok(true);
+    }
+    if let Some(source) = arg_value(args, "--import-pet") {
+        import_pet_package_inner(&PathBuf::from(source), true)?;
+        return Ok(true);
+    }
+    if let Some(id) = arg_value(args, "--set-pet") {
+        set_active_pet_inner(&id)?;
+        if args.iter().any(|arg| arg == "--launch") {
+            launch_existing_or_new(args)?;
+        }
         return Ok(true);
     }
     if args.iter().any(|arg| arg == "--launch") {
@@ -626,25 +804,7 @@ fn load_image_data_url(path: String) -> Result<String, String> {
 
 #[tauri::command]
 fn import_pet(source_dir: String) -> Result<PetInfo, String> {
-    let source = PathBuf::from(source_dir);
-    let pet = read_manifest(&source)?;
-    let companion = companion_dir()?;
-    let target = companion.join("pets").join(&pet.id);
-    if target.exists() {
-        fs::remove_dir_all(&target).map_err(|error| error.to_string())?;
-    }
-    fs::create_dir_all(&target).map_err(|error| error.to_string())?;
-    fs::copy(source.join("pet.json"), target.join("pet.json"))
-        .map_err(|error| error.to_string())?;
-    fs::copy(&pet.spritesheet_path, target.join("spritesheet.webp"))
-        .map_err(|error| error.to_string())?;
-
-    let mut imported = read_manifest(&target)?;
-    imported.spritesheet_path = target
-        .join("spritesheet.webp")
-        .to_string_lossy()
-        .to_string();
-    Ok(imported)
+    import_pet_package_inner(&PathBuf::from(source_dir), true)
 }
 
 #[tauri::command]

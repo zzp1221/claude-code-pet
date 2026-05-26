@@ -17,6 +17,7 @@ export type RuntimeState = {
   error?: string | null;
   message?: string | null;
   notificationType?: string | null;
+  petId?: string | null;
   reason?: string | null;
   toolName?: string | null;
 };

@@ -10,6 +10,7 @@ Claude Pet Companion is a standalone desktop pet overlay for Claude Code. It doe
 - Right-click menu for pet switching, pet import, scale, always-on-top, and quit.
 - One `.exe` can install hooks, create the `/pet` slash command, and launch the pet.
 - `/pet` in Claude Code launches or focuses the companion.
+- `/pet <description>` starts a Claude Code pet-creation workflow for a recognizable companion pet package.
 - User-level hooks track running, waiting for permission, failed, review, and idle states.
 - Visible prompt bubble when Claude Code is waiting for your permission.
 - Compatible with Codex-style pet packages.
@@ -67,6 +68,16 @@ In Claude Code, type:
 
 This launches or focuses the pet. If the pet is already open, it will be focused and briefly play the waving state.
 
+With arguments, `/pet` becomes a pet workflow command:
+
+```text
+/pet make a tiny moon rabbit with a brass staff
+/pet import C:\Users\ASUS\Downloads\my-pet
+/pet switch hiyue
+```
+
+Claude Code will use the installed `claude-pet-companion` skill to create, validate, import, or switch a recognizable desktop pet package.
+
 ### Desktop Controls
 
 - Drag the pet window by holding the transparent area.
@@ -84,6 +95,14 @@ This launches or focuses the pet. If the pet is already open, it will be focused
 | Response finished | `review`, then `idle` |
 
 When Claude Code asks for permission, the pet shows a visible bubble telling you to return to the terminal and choose Yes or No.
+
+The overlay also has a small Codex-like motion layer:
+
+- `/pet` launch briefly plays `waving`.
+- Prompt submission briefly plays `waving` before task work.
+- Dragging the pet uses `running-left` or `running-right`.
+- Completed responses briefly play `jumping` before review.
+- Long idle periods occasionally play a small `waving` or `jumping` flourish.
 
 ### Import Pets
 
@@ -169,6 +188,8 @@ The release executable includes the installer, hook handler, launcher, and state
 .\claude-pet-companion.exe --uninstall
 .\claude-pet-companion.exe --launch --state waving --event manual-launch --ttl-ms 3000
 .\claude-pet-companion.exe --hook --state waiting --event manual-hook
+.\claude-pet-companion.exe --import-pet "C:\path\to\pet-package"
+.\claude-pet-companion.exe --set-pet hiyue
 ```
 
 The Node hook handler remains available for local debugging:
@@ -208,6 +229,14 @@ scripts/uninstall-hooks.mjs  Development hook uninstaller
 config.example.json          Example local config
 launch-pet.vbs               Hidden-window launcher for local release exe
 ```
+
+The installer also writes a Claude Code skill to:
+
+```text
+%USERPROFILE%\.claude\skills\claude-pet-companion\SKILL.md
+```
+
+That skill defines how `/pet <description>`, `/pet import <folder>`, and `/pet switch <pet-id>` should behave.
 
 ### Configuration
 

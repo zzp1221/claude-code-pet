@@ -10,6 +10,7 @@ Claude Pet Companion 是一个独立的 Claude Code 桌面宠物伴侣。它不�
 - 右键菜单支持切换宠物、导入宠物、缩放、置顶开关和退出。
 - 一个 `.exe` 可完成 hooks 安装、`/pet` 命令安装和桌宠启动。
 - 在 Claude Code 中输入 `/pet` 可唤出或聚焦桌宠。
+- 输入 `/pet <描述>` 可让 Claude Code 进入可识别桌宠包的创建流程。
 - 用户级 hooks 自动感知运行中、等待权限、失败、完成回顾和空闲状态。
 - Claude Code 等待权限确认时，桌宠会显示明显的提示气泡。
 - 兼容 Codex 风格宠物包。
@@ -67,6 +68,16 @@ Claude Pet Companion_0.1.0_x64-setup.exe
 
 这会唤出或聚焦桌宠。如果桌宠已经打开，会聚焦已有窗口，并短暂播放挥手状态。
 
+带参数时，`/pet` 会变成桌宠工作流命令：
+
+```text
+/pet 做一只拿金箍棒的月亮兔桌宠
+/pet import C:\Users\ASUS\Downloads\my-pet
+/pet switch hiyue
+```
+
+Claude Code 会使用安装好的 `claude-pet-companion` skill 来创建、校验、导入或切换可被桌宠程序识别的宠物包。
+
 ### 桌面控制
 
 - 按住透明区域可以拖动桌宠窗口。
@@ -84,6 +95,14 @@ Claude Pet Companion_0.1.0_x64-setup.exe
 | 回复完成 | `review`，随后回到 `idle` |
 
 当 Claude Code 弹出权限确认时，桌宠会出现提示气泡，提醒你回到终端选择 Yes 或 No。
+
+悬浮窗还加入了一层更接近 Codex 跟宠的动作编排：
+
+- `/pet` 唤出时短暂播放 `waving`。
+- 用户提交 prompt 后，先短暂 `waving`，再进入任务工作状态。
+- 拖动桌宠时根据方向播放 `running-left` 或 `running-right`。
+- 回复完成时先短暂 `jumping`，再进入 `review`。
+- 长时间空闲时，偶尔播放一次 `waving` 或 `jumping` 小动作。
 
 ### 导入宠物
 
@@ -169,6 +188,8 @@ src-tauri/target/release/bundle/msi/
 .\claude-pet-companion.exe --uninstall
 .\claude-pet-companion.exe --launch --state waving --event manual-launch --ttl-ms 3000
 .\claude-pet-companion.exe --hook --state waiting --event manual-hook
+.\claude-pet-companion.exe --import-pet "C:\path\to\pet-package"
+.\claude-pet-companion.exe --set-pet hiyue
 ```
 
 Node 版 hook handler 仍保留，方便开发时调试：
@@ -208,6 +229,14 @@ scripts/uninstall-hooks.mjs  开发环境 hooks 卸载脚本
 config.example.json          本地配置示例
 launch-pet.vbs               本地 release exe 静默启动脚本
 ```
+
+安装器也会写入 Claude Code skill：
+
+```text
+%USERPROFILE%\.claude\skills\claude-pet-companion\SKILL.md
+```
+
+该 skill 定义了 `/pet <描述>`、`/pet import <folder>` 和 `/pet switch <pet-id>` 的行为。
 
 ### 配置文件
 

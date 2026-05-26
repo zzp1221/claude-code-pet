@@ -1,6 +1,7 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { MouseEvent } from "react";
 import { normalizeState } from "./atlas";
 import { PetCanvas } from "./PetCanvas";
 import type { CompanionConfig, PetInfo, PetState, RuntimeState } from "./types";
@@ -33,17 +34,17 @@ function noticeFor(runtime: RuntimeState, state: PetState) {
 
     return {
       tone: "waiting",
-      title: isPermission ? "需要你确认" : "Claude Code 在等你",
-      body: shortText(runtime.message) || (isPermission ? "请回到终端选择 Yes / No" : "请回到 Claude Code 处理当前提示"),
-      detail: runtime.toolName ? `来自 ${runtime.toolName}` : ""
+      title: isPermission ? "Needs your approval" : "Claude Code is waiting",
+      body: shortText(runtime.message) || (isPermission ? "Return to the terminal and choose Yes / No" : "Return to Claude Code to continue"),
+      detail: runtime.toolName ? `From ${runtime.toolName}` : ""
     };
   }
 
   if (state === "failed") {
     return {
       tone: "failed",
-      title: "执行失败",
-      body: shortText(runtime.error || runtime.reason) || "Claude Code 遇到了错误",
+      title: "Action failed",
+      body: shortText(runtime.error || runtime.reason) || "Claude Code hit an error",
       detail: ""
     };
   }
@@ -51,13 +52,17 @@ function noticeFor(runtime: RuntimeState, state: PetState) {
   if (state === "review") {
     return {
       tone: "review",
-      title: "回复完成",
-      body: "可以回到 Claude Code 查看结果",
+      title: "Response ready",
+      body: "Return to Claude Code to review the result",
       detail: ""
     };
   }
 
   return null;
+}
+
+function randomIdleDelay() {
+  return 9000 + Math.round(Math.random() * 9000);
 }
 
 export default function App() {
@@ -73,8 +78,17 @@ export default function App() {
   });
   const [menuOpen, setMenuOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [sequenceState, setSequenceState] = useState<PetState | null>(null);
+  const [idleFlourish, setIdleFlourish] = useState<PetState | null>(null);
+  const [dragState, setDragState] = useState<PetState | null>(null);
+  const lastRuntimeUpdate = useRef("");
+  const sequenceTimer = useRef<number | null>(null);
+  const idleTimer = useRef<number | null>(null);
+  const idleResetTimer = useRef<number | null>(null);
+  const dragTimer = useRef<number | null>(null);
 
   const activeState = useMemo<PetState>(() => normalizeState(runtime.state), [runtime.state]);
+  const displayState = dragState ?? sequenceState ?? idleFlourish ?? activeState;
   const notice = useMemo(() => noticeFor(runtime, activeState), [activeState, runtime]);
 
   const refreshPets = useCallback(async (activeId?: string) => {
@@ -128,6 +142,74 @@ export default function App() {
     return () => window.clearInterval(interval);
   }, []);
 
+  useEffect(() => {
+    const shouldRefreshPets = runtime.event === "pet-imported" || runtime.event === "pet-switched";
+    if (!runtime.updatedAt || !shouldRefreshPets) return;
+
+    let cancelled = false;
+    async function refreshFromConfig() {
+      try {
+        const loaded = await invoke<CompanionConfig>("get_config");
+        if (cancelled) return;
+        setConfig(loaded);
+        await refreshPets(runtime.petId ?? loaded.activePetId);
+      } catch (refreshError) {
+        if (!cancelled) setError(refreshError instanceof Error ? refreshError.message : String(refreshError));
+      }
+    }
+
+    void refreshFromConfig();
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshPets, runtime.event, runtime.petId, runtime.updatedAt]);
+
+  useEffect(() => {
+    return () => {
+      for (const timer of [sequenceTimer.current, idleTimer.current, idleResetTimer.current, dragTimer.current]) {
+        if (timer !== null) window.clearTimeout(timer);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!runtime.updatedAt || runtime.updatedAt === lastRuntimeUpdate.current) return;
+    lastRuntimeUpdate.current = runtime.updatedAt;
+    if (sequenceTimer.current !== null) window.clearTimeout(sequenceTimer.current);
+    setSequenceState(null);
+
+    const event = runtime.event || "";
+    if (activeState === "running" && event === "user-prompt") {
+      setSequenceState("waving");
+      sequenceTimer.current = window.setTimeout(() => setSequenceState(null), 900);
+      return;
+    }
+
+    if (event.includes("slash-command") || event.includes("launch")) {
+      setSequenceState("waving");
+      sequenceTimer.current = window.setTimeout(() => setSequenceState(null), 2400);
+      return;
+    }
+
+    if (activeState === "review") {
+      setSequenceState("jumping");
+      sequenceTimer.current = window.setTimeout(() => setSequenceState(null), 700);
+    }
+  }, [activeState, runtime.event, runtime.updatedAt]);
+
+  useEffect(() => {
+    if (idleTimer.current !== null) window.clearTimeout(idleTimer.current);
+    if (idleResetTimer.current !== null) window.clearTimeout(idleResetTimer.current);
+    setIdleFlourish(null);
+
+    if (activeState !== "idle" || sequenceState || dragState || menuOpen) return;
+
+    idleTimer.current = window.setTimeout(() => {
+      setIdleFlourish(Math.random() > 0.55 ? "waving" : "jumping");
+      idleResetTimer.current = window.setTimeout(() => setIdleFlourish(null), 1100);
+    }, randomIdleDelay());
+  }, [activeState, sequenceState, dragState, menuOpen, runtime.updatedAt]);
+
   async function choosePet(id: string) {
     const pet = pets.find((candidate) => candidate.id === id);
     if (!pet) return;
@@ -178,8 +260,11 @@ export default function App() {
     await invoke("close_app");
   }
 
-  async function startDrag() {
+  async function startDrag(event: MouseEvent<HTMLButtonElement>) {
     if (menuOpen) return;
+    if (dragTimer.current !== null) window.clearTimeout(dragTimer.current);
+    setDragState(event.clientX < window.innerWidth / 2 ? "running-left" : "running-right");
+    dragTimer.current = window.setTimeout(() => setDragState(null), 1000);
     await invoke("start_window_drag");
   }
 
@@ -188,13 +273,13 @@ export default function App() {
       event.preventDefault();
       setMenuOpen((openNow) => !openNow);
     }}>
-      <button className="drag-layer" aria-label="Drag pet" onMouseDown={() => void startDrag()} />
+      <button className="drag-layer" aria-label="Drag pet" onMouseDown={(event) => void startDrag(event)} />
       <button className="menu-dot" aria-label="Pet menu" onClick={() => setMenuOpen((openNow) => !openNow)}>
         <span />
       </button>
 
       <section className="pet-stage">
-        <PetCanvas imageUrl={imageUrl} state={activeState} scale={config.window.scale} />
+        <PetCanvas imageUrl={imageUrl} state={displayState} scale={config.window.scale} />
       </section>
 
       {notice && (
@@ -207,7 +292,7 @@ export default function App() {
 
       <div className="caption">
         <strong>{activePet?.displayName ?? "Claude Pet"}</strong>
-        <span>{activeState}</span>
+        <span>{displayState}</span>
       </div>
 
       {menuOpen && (
