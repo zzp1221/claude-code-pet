@@ -57,6 +57,73 @@ select {
   height: auto;
 }
 
+.status-bubble {
+  position: absolute;
+  left: 50%;
+  top: 16px;
+  z-index: 4;
+  width: min(304px, calc(100vw - 32px));
+  display: grid;
+  gap: 3px;
+  transform: translateX(-50%);
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  background: rgba(18, 20, 27, 0.82);
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(16px);
+  color: rgba(255, 255, 255, 0.94);
+  pointer-events: none;
+  animation: bubble-pop 220ms ease-out;
+}
+
+.status-bubble::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -7px;
+  width: 12px;
+  height: 12px;
+  transform: translateX(-50%) rotate(45deg);
+  border-right: 1px solid rgba(255, 255, 255, 0.2);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+  background: inherit;
+}
+
+.status-bubble strong {
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+.status-bubble span,
+.status-bubble small {
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.76);
+  font-size: 12px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-bubble small {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.status-bubble.waiting {
+  border-color: rgba(255, 213, 107, 0.54);
+  background: rgba(41, 33, 18, 0.86);
+}
+
+.status-bubble.failed {
+  border-color: rgba(255, 105, 105, 0.54);
+  background: rgba(48, 20, 22, 0.86);
+}
+
+.status-bubble.review {
+  border-color: rgba(111, 230, 177, 0.45);
+  background: rgba(18, 40, 31, 0.86);
+}
+
 .caption {
   position: absolute;
   left: 50%;
@@ -215,4 +282,15 @@ select {
   color: #ffb6b6;
   font-size: 12px;
   line-height: 1.4;
+}
+
+@keyframes bubble-pop {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 6px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+  }
 }

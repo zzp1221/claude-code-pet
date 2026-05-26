@@ -14,6 +14,11 @@ export type RuntimeState = {
   event: string;
   updatedAt: string;
   ttlMs: number;
+  error?: string | null;
+  message?: string | null;
+  notificationType?: string | null;
+  reason?: string | null;
+  toolName?: string | null;
 };
 
 export type WindowConfig = {

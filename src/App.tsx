@@ -18,6 +18,48 @@ function clampScale(value: number) {
   return Math.min(2.5, Math.max(0.5, Number(value.toFixed(2))));
 }
 
+function shortText(value: string | null | undefined, maxLength = 72) {
+  if (!value) return "";
+  return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
+}
+
+function noticeFor(runtime: RuntimeState, state: PetState) {
+  if (state === "waiting") {
+    const isPermission =
+      runtime.event === "permission-request" ||
+      runtime.event === "exit-plan-mode" ||
+      runtime.event.includes("permission") ||
+      runtime.notificationType === "permission_prompt";
+
+    return {
+      tone: "waiting",
+      title: isPermission ? "需要你确认" : "Claude Code 在等你",
+      body: shortText(runtime.message) || (isPermission ? "请回到终端选择 Yes / No" : "请回到 Claude Code 处理当前提示"),
+      detail: runtime.toolName ? `来自 ${runtime.toolName}` : ""
+    };
+  }
+
+  if (state === "failed") {
+    return {
+      tone: "failed",
+      title: "执行失败",
+      body: shortText(runtime.error || runtime.reason) || "Claude Code 遇到了错误",
+      detail: ""
+    };
+  }
+
+  if (state === "review") {
+    return {
+      tone: "review",
+      title: "回复完成",
+      body: "可以回到 Claude Code 查看结果",
+      detail: ""
+    };
+  }
+
+  return null;
+}
+
 export default function App() {
   const [config, setConfig] = useState<CompanionConfig>(DEFAULT_CONFIG);
   const [pets, setPets] = useState<PetInfo[]>([]);
@@ -33,6 +75,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
 
   const activeState = useMemo<PetState>(() => normalizeState(runtime.state), [runtime.state]);
+  const notice = useMemo(() => noticeFor(runtime, activeState), [activeState, runtime]);
 
   const refreshPets = useCallback(async (activeId?: string) => {
     const found = await invoke<PetInfo[]>("list_pets");
@@ -153,6 +196,14 @@ export default function App() {
       <section className="pet-stage">
         <PetCanvas imageUrl={imageUrl} state={activeState} scale={config.window.scale} />
       </section>
+
+      {notice && (
+        <div className={`status-bubble ${notice.tone}`} role="status" aria-live="polite">
+          <strong>{notice.title}</strong>
+          <span>{notice.body}</span>
+          {notice.detail && <small>{notice.detail}</small>}
+        </div>
+      )}
 
       <div className="caption">
         <strong>{activePet?.displayName ?? "Claude Pet"}</strong>
