@@ -27,6 +27,7 @@ const COPY = {
       enableTop: "保持置顶",
       importPet: "导入宠物文件夹",
       quit: "退出",
+      resetPosition: "重置位置",
       scanCodex: "扫描 Codex 宠物"
     },
     aria: {
@@ -82,6 +83,7 @@ const COPY = {
       enableTop: "Enable Always On Top",
       importPet: "Import Pet Folder",
       quit: "Quit",
+      resetPosition: "Reset Position",
       scanCodex: "Scan Codex Pets"
     },
     aria: {
@@ -128,7 +130,7 @@ const COPY = {
     }
   }
 } satisfies Record<Language, {
-  actions: Record<"allow" | "closeMenu" | "closeNotice" | "deny" | "disableTop" | "enableTop" | "importPet" | "quit" | "scanCodex", string>;
+  actions: Record<"allow" | "closeMenu" | "closeNotice" | "deny" | "disableTop" | "enableTop" | "importPet" | "quit" | "resetPosition" | "scanCodex", string>;
   aria: Record<"dragPet" | "menu", string>;
   fields: Record<"language" | "pet", string>;
   languageNames: Record<Language, string>;
@@ -274,6 +276,7 @@ export default function App() {
   useEffect(() => {
     const interval = window.setInterval(async () => {
       try {
+        await invoke("write_pet_heartbeat");
         const next = await invoke<RuntimeState>("read_state");
         setRuntime((previous) => {
           if (previous.updatedAt === next.updatedAt && previous.state === next.state) {
@@ -427,6 +430,10 @@ export default function App() {
     });
   }
 
+  async function resetPosition() {
+    await invoke("reset_window_position");
+  }
+
   async function closeApp() {
     await invoke("close_app");
   }
@@ -531,6 +538,7 @@ export default function App() {
           <button className="wide" onClick={() => void toggleAlwaysOnTop()}>
             {config.window.alwaysOnTop ? copy.actions.disableTop : copy.actions.enableTop}
           </button>
+          <button className="wide" onClick={() => void resetPosition()}>{copy.actions.resetPosition}</button>
 
           {syncMessage && <p className="success">{syncMessage}</p>}
           {error && <p className="error">{error}</p>}

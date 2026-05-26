@@ -10,6 +10,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
 
 const COMPANION_DIR: &str = ".claude/pet-companion";
+const DEFAULT_WINDOW_X: i32 = 96;
+const DEFAULT_WINDOW_Y: i32 = 96;
 const HOOK_EVENTS: &[(&str, &str, &str, u64)] = &[
     ("SessionStart", "idle", "session-start", 0),
     ("SessionEnd", "idle", "session-end", 0),
@@ -116,6 +118,10 @@ fn approval_path(id: &str) -> Result<PathBuf, String> {
     Ok(approval_dir()?.join(format!("{id}.json")))
 }
 
+fn heartbeat_path() -> Result<PathBuf, String> {
+    Ok(companion_dir()?.join("runtime/heartbeat.json"))
+}
+
 fn launcher_script_path() -> Result<PathBuf, String> {
     Ok(companion_dir()?.join("runtime/launch-pet.vbs"))
 }
@@ -178,7 +184,8 @@ fn read_config_inner() -> Result<CompanionConfig, String> {
     }
     let text = fs::read_to_string(&path).map_err(|error| error.to_string())?;
     let raw: Value = serde_json::from_str(&text).map_err(|error| error.to_string())?;
-    let config: CompanionConfig = serde_json::from_value(raw.clone()).map_err(|error| error.to_string())?;
+    let config: CompanionConfig =
+        serde_json::from_value(raw.clone()).map_err(|error| error.to_string())?;
     if raw.get("language").is_none() {
         write_config_inner(&config)?;
     }
@@ -284,7 +291,10 @@ fn tool_input_summary(input: Option<&Value>) -> Option<String> {
             return Some(compact_json(tool_input, 220));
         }
     }
-    value.get("message").and_then(Value::as_str).map(str::to_string)
+    value
+        .get("message")
+        .and_then(Value::as_str)
+        .map(str::to_string)
 }
 
 fn write_json_file(path: &Path, value: &Value) -> Result<(), String> {
@@ -352,7 +362,7 @@ If Not fso.FileExists(exePath) Then
   WScript.Quit 1
 End If
 
-shell.Run Chr(34) & exePath & Chr(34) & " --show", 0, False
+shell.Run Chr(34) & exePath & Chr(34) & " --launch --state waving --event slash-command --ttl-ms 3000", 1, False
 "#,
         exe = vb_string(&exe),
         state = vb_string(&state)
@@ -479,10 +489,10 @@ fn install_pet_command_inner() -> Result<(), String> {
         r#"---
 description: Launch/focus Claude Pet Companion, or create/import a recognizable desktop pet when arguments are provided.
 argument-hint: [pet description | import <folder> | switch <pet-id> | sync]
-allowed-tools: Bash(wscript.exe *), Bash({} *), Read, Write, Edit, MultiEdit, Glob, Grep, LS
+allowed-tools: Bash(wscript.exe:*), Bash({}:*), Read, Write, Edit, MultiEdit, Glob, Grep, LS
 ---
 
-!wscript.exe {}
+!`wscript.exe {}`
 
 Arguments: $ARGUMENTS
 
@@ -661,6 +671,37 @@ fn write_state_inner(
     if ttl_ms > 0 {
         spawn_ttl_reset(ttl_ms, payload["updatedAt"].as_str().unwrap_or_default())?;
     }
+    Ok(())
+}
+
+fn apply_window_visibility(
+    window: &tauri::WebviewWindow,
+    config: &CompanionConfig,
+    force_position: bool,
+    focus: bool,
+) {
+    let _ = window.show();
+    let _ = window.unminimize();
+    let _ = window.set_always_on_top(config.window.always_on_top);
+    if force_position {
+        let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
+            x: DEFAULT_WINDOW_X,
+            y: DEFAULT_WINDOW_Y,
+        }));
+    } else if let (Some(x), Some(y)) = (config.window.x, config.window.y) {
+        let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }));
+    }
+    if focus {
+        let _ = window.set_focus();
+    }
+}
+
+fn reveal_main_window(app: &AppHandle, force_position: bool, focus: bool) -> Result<(), String> {
+    let config = read_config_inner()?;
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "Missing main window".to_string())?;
+    apply_window_visibility(&window, &config, force_position, focus);
     Ok(())
 }
 
@@ -859,9 +900,46 @@ fn wait_for_approval(id: &str, timeout_ms: u64) -> Result<Option<String>, String
     }
 }
 
+fn pet_is_online(max_age_ms: u128) -> bool {
+    let Ok(path) = heartbeat_path() else {
+        return false;
+    };
+    let Ok(value) = read_json_file(&path) else {
+        return false;
+    };
+    let Some(updated_at) = value
+        .get("updatedAt")
+        .and_then(Value::as_str)
+        .and_then(|text| text.parse::<u128>().ok())
+    else {
+        return false;
+    };
+    let Ok(now) = SystemTime::now().duration_since(UNIX_EPOCH) else {
+        return false;
+    };
+    now.as_millis().saturating_sub(updated_at) <= max_age_ms
+}
+
 fn run_hook(args: &[String]) -> Result<(), String> {
     let input = read_stdin_json();
     if is_decision_tool(input.as_ref()) {
+        if !pet_is_online(4000) {
+            write_state_inner(
+                "waiting",
+                "approval-request-terminal",
+                8000,
+                Some(json!({
+                    "requiresDecision": false,
+                    "toolName": input
+                        .as_ref()
+                        .and_then(|value| value.get("tool_name").or_else(|| value.get("toolName")))
+                        .and_then(Value::as_str),
+                    "toolInputSummary": tool_input_summary(input.as_ref()),
+                    "message": tool_input_summary(input.as_ref())
+                })),
+            )?;
+            return Ok(());
+        }
         let id = approval_id(input.as_ref());
         let tool_name = input
             .as_ref()
@@ -894,7 +972,12 @@ fn run_hook(args: &[String]) -> Result<(), String> {
                         }
                     })
                 );
-                write_state_inner("running", "approval-allowed", 0, Some(json!({ "approvalId": id })))?;
+                write_state_inner(
+                    "running",
+                    "approval-allowed",
+                    0,
+                    Some(json!({ "approvalId": id })),
+                )?;
             }
             Some(_) => {
                 println!(
@@ -907,7 +990,12 @@ fn run_hook(args: &[String]) -> Result<(), String> {
                         }
                     })
                 );
-                write_state_inner("idle", "approval-denied", 0, Some(json!({ "approvalId": id })))?;
+                write_state_inner(
+                    "idle",
+                    "approval-denied",
+                    0,
+                    Some(json!({ "approvalId": id })),
+                )?;
             }
             None => {
                 println!(
@@ -920,7 +1008,12 @@ fn run_hook(args: &[String]) -> Result<(), String> {
                         }
                     })
                 );
-                write_state_inner("idle", "approval-timeout", 0, Some(json!({ "approvalId": id })))?;
+                write_state_inner(
+                    "idle",
+                    "approval-timeout",
+                    0,
+                    Some(json!({ "approvalId": id })),
+                )?;
             }
         }
         return Ok(());
@@ -956,7 +1049,9 @@ fn same_directory(left: &Path, right: &Path) -> bool {
 }
 
 fn file_modified(path: &Path) -> Option<SystemTime> {
-    fs::metadata(path).and_then(|metadata| metadata.modified()).ok()
+    fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
 }
 
 fn target_needs_pet_copy(source: &Path, source_pet: &PetInfo, target: &Path) -> bool {
@@ -974,7 +1069,11 @@ fn target_needs_pet_copy(source: &Path, source_pet: &PetInfo, target: &Path) -> 
     source_manifest_time > target_manifest_time || source_sheet_time > target_sheet_time
 }
 
-fn import_pet_package_inner(source: &Path, activate: bool, announce: bool) -> Result<PetInfo, String> {
+fn import_pet_package_inner(
+    source: &Path,
+    activate: bool,
+    announce: bool,
+) -> Result<PetInfo, String> {
     let pet = read_manifest(source)?;
     let target = companion_pets_dir()?.join(&pet.id);
     let source_is_target = target.is_dir() && same_directory(source, &target);
@@ -1066,7 +1165,7 @@ fn launch_existing_or_new(args: &[String]) -> Result<(), String> {
         .unwrap_or(3000);
     write_state_inner(&state, &event, ttl_ms, None)?;
     let exe = current_exe_path()?;
-    spawn_gui_detached(&exe, &["--show"])?;
+    spawn_gui_detached(&exe, &["--show", "--force-position", "--focus"])?;
     Ok(())
 }
 
@@ -1178,6 +1277,16 @@ fn sync_codex_pets() -> Result<Vec<PetInfo>, String> {
 }
 
 #[tauri::command]
+fn write_pet_heartbeat() -> Result<(), String> {
+    write_json_file(
+        &heartbeat_path()?,
+        &json!({
+            "updatedAt": now_iso_like()
+        }),
+    )
+}
+
+#[tauri::command]
 fn write_approval_decision(approval_id: String, decision: String) -> Result<(), String> {
     let id = sanitize_id(&approval_id);
     let decision = if decision == "allow" { "allow" } else { "deny" };
@@ -1199,12 +1308,25 @@ fn start_window_drag(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn reset_window_position(app: AppHandle) -> Result<(), String> {
+    let mut config = read_config_inner()?;
+    config.window.x = Some(DEFAULT_WINDOW_X);
+    config.window.y = Some(DEFAULT_WINDOW_Y);
+    write_config_inner(&config)?;
+    reveal_main_window(&app, true, true)
+}
+
+#[tauri::command]
 fn close_app(app: AppHandle) {
     app.exit(0);
 }
 
 pub fn run() {
     let args: Vec<String> = env::args().collect();
+    let initial_force_position = args
+        .iter()
+        .any(|arg| arg == "--force-position" || arg == "--launch");
+    let initial_focus = initial_force_position || args.iter().any(|arg| arg == "--focus");
     match run_cli(&args) {
         Ok(true) => return,
         Ok(false) => {}
@@ -1216,27 +1338,21 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
-            if args.iter().any(|arg| arg == "--launch" || arg == "--show") {
-                let _ = write_state_inner("waving", "slash-command", 3000, None);
-            }
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
+            let force_position = args
+                .iter()
+                .any(|arg| arg == "--force-position" || arg == "--launch");
+            let focus = force_position || args.iter().any(|arg| arg == "--focus");
+            let _ = reveal_main_window(app, force_position, focus);
             let _ = app.emit("single-instance", SingleInstancePayload { args, cwd });
         }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .setup(|app| {
+        .setup(move |app| {
             let _ = ensure_user_installation();
             let config =
                 read_config_inner().unwrap_or_else(|_| default_config().expect("default config"));
             if let Some(window) = app.get_webview_window("main") {
-                let _ = window.set_always_on_top(config.window.always_on_top);
-                if let (Some(x), Some(y)) = (config.window.x, config.window.y) {
-                    let _ = window
-                        .set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }));
-                }
+                apply_window_visibility(&window, &config, initial_force_position, initial_focus);
             }
             Ok(())
         })
@@ -1247,9 +1363,11 @@ pub fn run() {
             list_pets,
             load_image_data_url,
             read_state,
+            reset_window_position,
             save_config,
             start_window_drag,
             sync_codex_pets,
+            write_pet_heartbeat,
             write_approval_decision
         ])
         .run(tauri::generate_context!())
