@@ -8,6 +8,8 @@
 - 右键菜单支持切换宠物、导入宠物文件夹、缩放、置顶开关和退出
 - 自动扫描 Codex 宠物目录和本地导入目录
 - Claude Code 用户级 hooks 驱动状态：运行中、等待权限、失败、完成回顾等
+- 一个 `.exe` 可完成首次安装、hooks 写入和 `/pet` 命令安装
+- 在 Claude Code 中输入 `/pet` 可唤出或聚焦桌宠
 - 安装 hooks 前自动备份 `~/.claude/settings.json`
 - 卸载脚本只移除指向本项目 hook handler 的配置，不影响 `statusLine`、`claude-hud` 或其它 Claude settings
 
@@ -31,7 +33,37 @@ Claude Code 触发 hook 后，Node handler 会快速写入 `runtime/state.json` 
 - Rust 和 Tauri 2 构建环境
 - Microsoft Edge WebView2 Runtime
 
-## Quick Start
+## Quick Start For Users
+
+下载并运行安装器：
+
+```text
+Claude Pet Companion_0.1.0_x64-setup.exe
+```
+
+安装后打开 `claude-pet-companion.exe`。首次启动会自动完成：
+
+- 创建 `~/.claude/pet-companion/config.json`
+- 写入 Claude Code 用户级 hooks
+- 创建 Claude Code 个人命令 `~/.claude/commands/pet.md`
+- 启动透明桌面宠物窗口
+
+之后在 Claude Code 中输入：
+
+```text
+/pet
+```
+
+即可唤出或聚焦桌宠。重复输入 `/pet` 不会稳定多开窗口，已有窗口会被聚焦并短暂播放挥手状态。
+
+也可以用 exe 命令行安装或卸载：
+
+```powershell
+.\claude-pet-companion.exe --install
+.\claude-pet-companion.exe --uninstall
+```
+
+## Quick Start For Developers
 
 ```powershell
 git clone <your-repo-url> claude-pet-companion
@@ -125,6 +157,12 @@ npm run uninstall-hooks
 Hook handler:
 
 ```text
+claude-pet-companion.exe --hook
+```
+
+开发环境也保留了 Node 版 handler：
+
+```text
 %USERPROFILE%\.claude\pet-companion\hook\claude-pet-hook.mjs
 ```
 
@@ -140,6 +178,13 @@ Runtime state:
 node .\hook\claude-pet-hook.mjs --state running --event manual-test
 node .\hook\claude-pet-hook.mjs --state waiting --event permission-test
 node .\hook\claude-pet-hook.mjs --state failed --event failure-test --ttl-ms 3000
+```
+
+发布版 exe 测试：
+
+```powershell
+.\src-tauri\target\release\claude-pet-companion.exe --launch --state waving --event manual-launch --ttl-ms 3000
+.\src-tauri\target\release\claude-pet-companion.exe --hook --state waiting --event manual-hook
 ```
 
 Simulate a Claude permission notification:

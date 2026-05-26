@@ -1,10 +1,41 @@
 use base64::Engine;
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::env;
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Manager};
+use std::process::{Command, Stdio};
+use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::{AppHandle, Emitter, Manager};
 
 const COMPANION_DIR: &str = ".claude/pet-companion";
+const HOOK_EVENTS: &[(&str, &str, &str, u64)] = &[
+    ("SessionStart", "idle", "session-start", 0),
+    ("SessionEnd", "idle", "session-end", 0),
+    ("UserPromptSubmit", "running", "user-prompt", 0),
+    ("UserPromptExpansion", "running", "user-prompt-expansion", 0),
+    ("PreToolUse", "running", "pre-tool-use", 0),
+    ("PostToolUse", "running", "post-tool-use", 0),
+    ("PostToolBatch", "running", "post-tool-batch", 0),
+    ("PermissionRequest", "waiting", "permission-request", 0),
+    ("Notification", "waiting", "notification", 0),
+    ("Elicitation", "waiting", "elicitation", 0),
+    ("ElicitationResult", "running", "elicitation-result", 0),
+    (
+        "PostToolUseFailure",
+        "failed",
+        "post-tool-use-failure",
+        3000,
+    ),
+    ("PermissionDenied", "failed", "permission-denied", 3000),
+    ("StopFailure", "failed", "stop-failure", 3000),
+    ("SubagentStart", "running", "subagent-start", 0),
+    ("Stop", "review", "stop", 3000),
+    ("SubagentStop", "review", "subagent-stop", 3000),
+    ("TaskCreated", "running", "task-created", 0),
+    ("TaskCompleted", "review", "task-completed", 3000),
+];
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -42,9 +73,15 @@ struct PetInfo {
     spritesheet_path: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct SingleInstancePayload {
+    args: Vec<String>,
+    cwd: String,
+}
+
 fn home_dir() -> Result<PathBuf, String> {
-    std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
+    env::var_os("USERPROFILE")
+        .or_else(|| env::var_os("HOME"))
         .map(PathBuf::from)
         .ok_or_else(|| "Could not locate the user home directory".to_string())
 }
@@ -59,6 +96,28 @@ fn config_path() -> Result<PathBuf, String> {
 
 fn state_path() -> Result<PathBuf, String> {
     Ok(companion_dir()?.join("runtime/state.json"))
+}
+
+fn current_exe_path() -> Result<PathBuf, String> {
+    env::current_exe().map_err(|error| error.to_string())
+}
+
+fn claude_settings_path() -> Result<PathBuf, String> {
+    Ok(home_dir()?.join(".claude/settings.json"))
+}
+
+fn claude_commands_dir() -> Result<PathBuf, String> {
+    Ok(home_dir()?.join(".claude/commands"))
+}
+
+fn backup_path(label: &str) -> Result<PathBuf, String> {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_millis();
+    Ok(home_dir()?
+        .join(".claude/backups")
+        .join(format!("settings.pet-companion.{label}.{stamp}.json")))
 }
 
 fn default_config() -> Result<CompanionConfig, String> {
@@ -138,6 +197,386 @@ fn list_pets_inner(config: &CompanionConfig) -> Vec<PetInfo> {
     pets
 }
 
+fn read_json_file(path: &Path) -> Result<Value, String> {
+    if !path.is_file() {
+        return Ok(json!({}));
+    }
+    let text = fs::read_to_string(path).map_err(|error| error.to_string())?;
+    serde_json::from_str(&text).map_err(|error| error.to_string())
+}
+
+fn write_json_file(path: &Path, value: &Value) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let text = serde_json::to_string_pretty(value).map_err(|error| error.to_string())?;
+    fs::write(path, format!("{text}\n")).map_err(|error| error.to_string())
+}
+
+fn backup_settings(label: &str) -> Result<(), String> {
+    let settings = claude_settings_path()?;
+    if !settings.is_file() {
+        return Ok(());
+    }
+    let target = backup_path(label)?;
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    fs::copy(settings, target).map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn path_text(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+fn command_arg(path: &Path) -> String {
+    format!("\"{}\"", path_text(path))
+}
+
+fn hook_command_for(exe: &Path, state: &str, event: &str, ttl_ms: u64) -> String {
+    let mut command = format!(
+        "{} --hook --state {} --event {}",
+        command_arg(exe),
+        state,
+        event
+    );
+    if ttl_ms > 0 {
+        command.push_str(&format!(" --ttl-ms {ttl_ms}"));
+    }
+    command
+}
+
+fn is_pet_hook(entry: &Value) -> bool {
+    let Some(hooks) = entry.get("hooks").and_then(Value::as_array) else {
+        return false;
+    };
+    hooks.iter().any(|hook| {
+        hook.get("command")
+            .and_then(Value::as_str)
+            .is_some_and(|command| {
+                command.contains("claude-pet-companion") || command.contains("claude-pet-hook.mjs")
+            })
+    })
+}
+
+fn hook_entry(exe: &Path, state: &str, event: &str, ttl_ms: u64) -> Value {
+    json!({
+        "matcher": "",
+        "hooks": [
+            {
+                "type": "command",
+                "command": hook_command_for(exe, state, event, ttl_ms),
+                "timeout": 5,
+                "async": true
+            }
+        ]
+    })
+}
+
+fn install_hooks_inner() -> Result<(), String> {
+    let settings_path = claude_settings_path()?;
+    backup_settings("install")?;
+    let mut settings = read_json_file(&settings_path)?;
+    if !settings.is_object() {
+        settings = json!({});
+    }
+    if settings.get("hooks").and_then(Value::as_object).is_none() {
+        settings["hooks"] = json!({});
+    }
+    let exe = current_exe_path()?;
+    let hooks = settings
+        .get_mut("hooks")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| "Claude settings hooks must be an object".to_string())?;
+
+    for (event_name, state, event, ttl_ms) in HOOK_EVENTS {
+        let current = hooks.remove(*event_name).unwrap_or_else(|| json!([]));
+        let mut entries = match current {
+            Value::Array(items) => items,
+            Value::Null => Vec::new(),
+            other => vec![other],
+        };
+        entries.retain(|entry| !is_pet_hook(entry));
+        entries.push(hook_entry(&exe, state, event, *ttl_ms));
+        hooks.insert((*event_name).to_string(), Value::Array(entries));
+    }
+
+    write_json_file(&settings_path, &settings)?;
+    write_state_inner("idle", "installed", 0, None)?;
+    install_pet_command_inner()?;
+    Ok(())
+}
+
+fn uninstall_hooks_inner() -> Result<(), String> {
+    let settings_path = claude_settings_path()?;
+    backup_settings("uninstall")?;
+    let mut settings = read_json_file(&settings_path)?;
+    if let Some(hooks) = settings.get_mut("hooks").and_then(Value::as_object_mut) {
+        let event_names: Vec<String> = hooks.keys().cloned().collect();
+        for event_name in event_names {
+            let current = hooks.remove(&event_name).unwrap_or_else(|| json!([]));
+            let mut entries = match current {
+                Value::Array(items) => items,
+                Value::Null => Vec::new(),
+                other => vec![other],
+            };
+            entries.retain(|entry| !is_pet_hook(entry));
+            if !entries.is_empty() {
+                hooks.insert(event_name, Value::Array(entries));
+            }
+        }
+    }
+    write_json_file(&settings_path, &settings)?;
+    let command_path = claude_commands_dir()?.join("pet.md");
+    if command_path.is_file() {
+        let _ = fs::remove_file(command_path);
+    }
+    Ok(())
+}
+
+fn install_pet_command_inner() -> Result<(), String> {
+    let command_dir = claude_commands_dir()?;
+    fs::create_dir_all(&command_dir).map_err(|error| error.to_string())?;
+    let exe = current_exe_path()?;
+    let command = format!(
+        r#"---
+description: Launch or focus the Claude Pet Companion desktop pet.
+allowed-tools: Bash({} *)
+---
+
+!{} --launch --state waving --event slash-command --ttl-ms 3000
+
+Claude Pet Companion has been launched.
+"#,
+        path_text(&exe),
+        command_arg(&exe)
+    );
+    fs::write(command_dir.join("pet.md"), command).map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn ensure_user_installation() -> Result<(), String> {
+    let _ = read_config_inner()?;
+    install_hooks_inner()
+}
+
+fn now_iso_like() -> String {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default();
+    format!("{millis}")
+}
+
+fn write_state_inner(
+    state: &str,
+    event: &str,
+    ttl_ms: u64,
+    extra: Option<Value>,
+) -> Result<(), String> {
+    let path = state_path()?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let mut payload = json!({
+        "state": state,
+        "event": event,
+        "updatedAt": now_iso_like(),
+        "ttlMs": ttl_ms,
+        "source": "claude-pet-companion-exe"
+    });
+    if let (Some(object), Some(extra_object)) = (
+        payload.as_object_mut(),
+        extra.and_then(|value| value.as_object().cloned()),
+    ) {
+        for (key, value) in extra_object {
+            object.insert(key, value);
+        }
+    }
+    write_json_file(&path, &payload)?;
+    if ttl_ms > 0 {
+        spawn_ttl_reset(ttl_ms, payload["updatedAt"].as_str().unwrap_or_default())?;
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn spawn_command_hidden(exe: &Path, args: &[&str]) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    Command::new(exe)
+        .args(args)
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(not(windows))]
+fn spawn_command_hidden(exe: &Path, args: &[&str]) -> Result<(), String> {
+    Command::new(exe)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+fn spawn_ttl_reset(ttl_ms: u64, expected_updated_at: &str) -> Result<(), String> {
+    let exe = current_exe_path()?;
+    spawn_command_hidden(
+        &exe,
+        &[
+            "--ttl-reset",
+            "--expected-updated-at",
+            expected_updated_at,
+            "--ttl-ms",
+            &ttl_ms.to_string(),
+        ],
+    )
+}
+
+fn run_ttl_reset(args: &[String]) -> Result<(), String> {
+    let ttl_ms = arg_value(args, "--ttl-ms")
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(0);
+    let expected = arg_value(args, "--expected-updated-at").unwrap_or_default();
+    std::thread::sleep(std::time::Duration::from_millis(ttl_ms));
+    let path = state_path()?;
+    let current = read_json_file(&path).unwrap_or_else(|_| json!({}));
+    if current.get("updatedAt").and_then(Value::as_str) == Some(expected.as_str()) {
+        write_state_inner("idle", "ttl-expired", 0, None)?;
+    }
+    Ok(())
+}
+
+fn arg_value(args: &[String], name: &str) -> Option<String> {
+    args.windows(2)
+        .find(|pair| pair[0] == name)
+        .map(|pair| pair[1].clone())
+}
+
+fn read_stdin_json() -> Option<Value> {
+    use std::io::{self, Read};
+    let mut input = String::new();
+    if io::stdin().read_to_string(&mut input).is_err() || input.trim().is_empty() {
+        return None;
+    }
+    serde_json::from_str(&input).ok()
+}
+
+fn hook_event_name(input: Option<&Value>) -> Option<&str> {
+    input
+        .and_then(|value| {
+            value
+                .get("hook_event_name")
+                .or_else(|| value.get("hookEventName"))
+                .or_else(|| value.get("event"))
+        })
+        .and_then(Value::as_str)
+}
+
+fn infer_hook_state(input: Option<&Value>) -> (&'static str, String, u64) {
+    match hook_event_name(input) {
+        Some("Notification") => {
+            let notification_type = input
+                .and_then(|value| value.get("notification_type"))
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            match notification_type {
+                "auth_success" | "elicitation_complete" | "elicitation_response" => {
+                    ("idle", format!("notification:{notification_type}"), 0)
+                }
+                _ => ("waiting", format!("notification:{notification_type}"), 0),
+            }
+        }
+        Some("PreToolUse") => {
+            let tool_name = input
+                .and_then(|value| value.get("tool_name"))
+                .and_then(Value::as_str);
+            match tool_name {
+                Some("AskUserQuestion") => ("waiting", "ask-user-question".to_string(), 0),
+                Some("ExitPlanMode") => ("waiting", "exit-plan-mode".to_string(), 0),
+                _ => ("running", "pre-tool-use".to_string(), 0),
+            }
+        }
+        Some(event_name) => HOOK_EVENTS
+            .iter()
+            .find(|(name, _, _, _)| *name == event_name)
+            .map(|(_, state, event, ttl_ms)| (*state, (*event).to_string(), *ttl_ms))
+            .unwrap_or(("idle", event_name.to_string(), 0)),
+        None => ("idle", "unknown".to_string(), 0),
+    }
+}
+
+fn run_hook(args: &[String]) -> Result<(), String> {
+    let input = read_stdin_json();
+    let (inferred_state, inferred_event, inferred_ttl) = infer_hook_state(input.as_ref());
+    let state = arg_value(args, "--state").unwrap_or_else(|| inferred_state.to_string());
+    let event = match hook_event_name(input.as_ref()) {
+        Some("Notification") | Some("PreToolUse") => inferred_event,
+        _ => arg_value(args, "--event").unwrap_or(inferred_event),
+    };
+    let ttl_ms = arg_value(args, "--ttl-ms")
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(inferred_ttl);
+    let extra = input.map(|value| {
+        json!({
+            "hookEventName": hook_event_name(Some(&value)),
+            "toolName": value.get("tool_name").or_else(|| value.get("toolName")).cloned().unwrap_or(Value::Null),
+            "notificationType": value.get("notification_type").cloned().unwrap_or(Value::Null),
+            "sessionId": value.get("session_id").or_else(|| value.get("sessionId")).cloned().unwrap_or(Value::Null)
+        })
+    });
+    write_state_inner(&state, &event, ttl_ms, extra)
+}
+
+fn launch_existing_or_new(args: &[String]) -> Result<(), String> {
+    let state = arg_value(args, "--state").unwrap_or_else(|| "waving".to_string());
+    let event = arg_value(args, "--event").unwrap_or_else(|| "launch".to_string());
+    let ttl_ms = arg_value(args, "--ttl-ms")
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(3000);
+    write_state_inner(&state, &event, ttl_ms, None)?;
+    let exe = current_exe_path()?;
+    spawn_command_hidden(&exe, &["--show"])?;
+    Ok(())
+}
+
+fn run_cli(args: &[String]) -> Result<bool, String> {
+    if args.iter().any(|arg| arg == "--install") {
+        install_hooks_inner()?;
+        return Ok(true);
+    }
+    if args.iter().any(|arg| arg == "--uninstall") {
+        uninstall_hooks_inner()?;
+        return Ok(true);
+    }
+    if args.iter().any(|arg| arg == "--install-command") {
+        install_pet_command_inner()?;
+        return Ok(true);
+    }
+    if args.iter().any(|arg| arg == "--hook") {
+        run_hook(args)?;
+        return Ok(true);
+    }
+    if args.iter().any(|arg| arg == "--launch") {
+        launch_existing_or_new(args)?;
+        return Ok(true);
+    }
+    if args.iter().any(|arg| arg == "--ttl-reset") {
+        run_ttl_reset(args)?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
 #[tauri::command]
 fn get_config() -> Result<CompanionConfig, String> {
     read_config_inner()
@@ -158,18 +597,17 @@ fn list_pets() -> Result<Vec<PetInfo>, String> {
 }
 
 #[tauri::command]
-fn read_state() -> Result<serde_json::Value, String> {
+fn read_state() -> Result<Value, String> {
     let path = state_path()?;
     if !path.is_file() {
-        return Ok(serde_json::json!({
+        return Ok(json!({
             "state": "idle",
             "event": "initial",
             "updatedAt": "",
             "ttlMs": 0
         }));
     }
-    let text = fs::read_to_string(path).map_err(|error| error.to_string())?;
-    serde_json::from_str(&text).map_err(|error| error.to_string())
+    read_json_file(&path)
 }
 
 #[tauri::command]
@@ -177,7 +615,7 @@ fn load_image_data_url(path: String) -> Result<String, String> {
     let path = PathBuf::from(path);
     let bytes = fs::read(&path).map_err(|error| error.to_string())?;
     let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
-    let mime = match path.extension().and_then(|ext| ext.to_str()).unwrap_or("") {
+    let mime = match path.extension().and_then(OsStr::to_str).unwrap_or("") {
         "webp" => "image/webp",
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
@@ -196,12 +634,16 @@ fn import_pet(source_dir: String) -> Result<PetInfo, String> {
         fs::remove_dir_all(&target).map_err(|error| error.to_string())?;
     }
     fs::create_dir_all(&target).map_err(|error| error.to_string())?;
-    fs::copy(source.join("pet.json"), target.join("pet.json")).map_err(|error| error.to_string())?;
+    fs::copy(source.join("pet.json"), target.join("pet.json"))
+        .map_err(|error| error.to_string())?;
     fs::copy(&pet.spritesheet_path, target.join("spritesheet.webp"))
         .map_err(|error| error.to_string())?;
 
     let mut imported = read_manifest(&target)?;
-    imported.spritesheet_path = target.join("spritesheet.webp").to_string_lossy().to_string();
+    imported.spritesheet_path = target
+        .join("spritesheet.webp")
+        .to_string_lossy()
+        .to_string();
     Ok(imported)
 }
 
@@ -219,15 +661,38 @@ fn close_app(app: AppHandle) {
 }
 
 pub fn run() {
+    let args: Vec<String> = env::args().collect();
+    match run_cli(&args) {
+        Ok(true) => return,
+        Ok(false) => {}
+        Err(error) => {
+            let _ = write_state_inner("failed", "cli-error", 3000, Some(json!({ "error": error })));
+            return;
+        }
+    }
+
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
+            if args.iter().any(|arg| arg == "--launch" || arg == "--show") {
+                let _ = write_state_inner("waving", "slash-command", 3000, None);
+            }
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+            let _ = app.emit("single-instance", SingleInstancePayload { args, cwd });
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            let config = read_config_inner().unwrap_or_else(|_| default_config().expect("default config"));
+            let _ = ensure_user_installation();
+            let config =
+                read_config_inner().unwrap_or_else(|_| default_config().expect("default config"));
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_always_on_top(config.window.always_on_top);
                 if let (Some(x), Some(y)) = (config.window.x, config.window.y) {
-                    let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }));
+                    let _ = window
+                        .set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }));
                 }
             }
             Ok(())

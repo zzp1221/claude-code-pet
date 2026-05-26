@@ -13,7 +13,7 @@ function isPetHook(entry) {
   const hook = entry?.hooks?.[0] ?? entry;
   const command = hook?.command ?? "";
   const args = Array.isArray(hook?.args) ? hook.args.join(" ") : "";
-  return `${command} ${args}`.includes("claude-pet-hook.mjs");
+  return `${command} ${args}`.includes("claude-pet-hook.mjs") || `${command} ${args}`.includes("claude-pet-companion");
 }
 
 async function main() {

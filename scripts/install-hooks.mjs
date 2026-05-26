@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 const home = process.env.USERPROFILE || process.env.HOME;
@@ -10,6 +10,7 @@ const companionDir = join(claudeDir, "pet-companion");
 const settingsPath = join(claudeDir, "settings.json");
 const backupDir = join(claudeDir, "backups");
 const hookScript = join(companionDir, "hook", "claude-pet-hook.mjs");
+const releaseExe = join(companionDir, "src-tauri", "target", "release", "claude-pet-companion.exe");
 const nodeExe = process.execPath;
 
 const EVENT_MAP = [
@@ -38,6 +39,18 @@ function argsFor(state, event, ttlMs) {
   const args = [hookScript, "--state", state, "--event", event];
   if (ttlMs) args.push("--ttl-ms", String(ttlMs));
   return args;
+}
+
+async function hasReleaseExe() {
+  await access(releaseExe);
+  return true;
+}
+
+function commandHookFor(state, event, ttlMs) {
+  const quoted = `"${releaseExe.replaceAll("\\", "/")}"`;
+  let command = `${quoted} --hook --state ${state} --event ${event}`;
+  if (ttlMs) command += ` --ttl-ms ${ttlMs}`;
+  return command;
 }
 
 function normalizeEventHooks(settings, eventName) {
@@ -74,16 +87,24 @@ async function main() {
   for (const [eventName, state, event, ttlMs] of EVENT_MAP) {
     const hooks = normalizeEventHooks(settings, eventName);
     const filtered = withoutExistingPetHook(hooks);
+    const useReleaseExe = await hasReleaseExe().catch(() => false);
     filtered.push({
       matcher: "",
       hooks: [
-        {
-          type: "command",
-          command: nodeExe,
-          args: argsFor(state, event, ttlMs),
-          async: true,
-          timeout: 5
-        }
+        useReleaseExe
+          ? {
+              type: "command",
+              command: commandHookFor(state, event, ttlMs),
+              async: true,
+              timeout: 5
+            }
+          : {
+              type: "command",
+              command: nodeExe,
+              args: argsFor(state, event, ttlMs),
+              async: true,
+              timeout: 5
+            }
       ]
     });
     settings.hooks[eventName] = filtered;
