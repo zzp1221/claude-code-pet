@@ -1,225 +1,296 @@
 # Claude Pet Companion
 
-一个独立的 Claude Code 桌面宠物伴侣。它不会替换 Claude Code 内置功能，也不会占用终端状态行，而是通过用户级 hooks 写入状态文件，再由 Tauri 透明悬浮窗播放对应的宠物 spritesheet 动画。
+[简体中文](./README.zh-CN.md) | English
 
-## Features
+Claude Pet Companion is a standalone desktop pet overlay for Claude Code. It does not replace Claude Code's built-in features and does not use the terminal status line. Instead, Claude Code user-level hooks write runtime state, and a transparent Tauri window reads that state to play matching spritesheet animations.
 
-- 透明、无边框、置顶的桌面悬浮窗
-- 右键菜单支持切换宠物、导入宠物文件夹、缩放、置顶开关和退出
-- 自动扫描 Codex 宠物目录和本地导入目录
-- Claude Code 用户级 hooks 驱动状态：运行中、等待权限、失败、完成回顾等
-- 一个 `.exe` 可完成首次安装、hooks 写入和 `/pet` 命令安装
-- 在 Claude Code 中输入 `/pet` 可唤出或聚焦桌宠
-- 安装 hooks 前自动备份 `~/.claude/settings.json`
-- 卸载脚本只移除指向本项目 hook handler 的配置，不影响 `statusLine`、`claude-hud` 或其它 Claude settings
+## Highlights
 
-## How It Works
+- Transparent, frameless, always-on-top desktop pet window.
+- Right-click menu for pet switching, pet import, scale, always-on-top, and quit.
+- One `.exe` can install hooks, create the `/pet` slash command, and launch the pet.
+- `/pet` in Claude Code launches or focuses the companion.
+- User-level hooks track running, waiting for permission, failed, review, and idle states.
+- Visible prompt bubble when Claude Code is waiting for your permission.
+- Compatible with Codex-style pet packages.
+- Hook installer backs up `~/.claude/settings.json` before writing changes.
+- Uninstaller only removes handlers owned by this project.
+
+## Architecture
 
 ```mermaid
 flowchart LR
-  A["Claude Code hooks"] --> B["hook/claude-pet-hook.mjs"]
+  A["Claude Code user hooks"] --> B["claude-pet-companion.exe --hook"]
   B --> C["~/.claude/pet-companion/runtime/state.json"]
-  D["Tauri desktop overlay"] --> C
-  D --> E["Pet spritesheet animation"]
+  D["Tauri + React overlay"] --> C
+  D --> E["Canvas spritesheet animation"]
+  F["Claude Code /pet command"] --> G["claude-pet-companion.exe --launch"]
+  G --> D
 ```
 
-Claude Code 触发 hook 后，Node handler 会快速写入 `runtime/state.json` 并退出。桌面宠物窗口轮询该文件，然后在 canvas 上裁切并播放对应行的 spritesheet 帧。
+Claude Code sends hook input to `claude-pet-companion.exe --hook`. The executable writes `runtime/state.json` quickly and exits. The desktop overlay polls that file and renders the matching row from the active pet spritesheet.
 
-## Requirements
+## For Users
 
-- Windows 10/11
-- Claude Code
-- Node.js 20+
-- Rust 和 Tauri 2 构建环境
-- Microsoft Edge WebView2 Runtime
+### Requirements
 
-## Quick Start For Users
+- Windows 10 or Windows 11.
+- Claude Code.
+- Microsoft Edge WebView2 Runtime.
 
-下载并运行安装器：
+You do not need Node.js or Rust when using a release installer.
+
+### Install
+
+Download and run the NSIS installer from a release:
 
 ```text
 Claude Pet Companion_0.1.0_x64-setup.exe
 ```
 
-安装后打开 `claude-pet-companion.exe`。首次启动会自动完成：
+Then open `claude-pet-companion.exe`. On first launch it will:
 
-- 创建 `~/.claude/pet-companion/config.json`
-- 写入 Claude Code 用户级 hooks
-- 创建 Claude Code 个人命令 `~/.claude/commands/pet.md`
-- 启动透明桌面宠物窗口
+- Create `~/.claude/pet-companion/config.json`.
+- Install Claude Code user-level hooks.
+- Create the Claude Code personal command `~/.claude/commands/pet.md`.
+- Launch the transparent desktop pet window.
 
-之后在 Claude Code 中输入：
+The installer keeps your existing Claude settings, including `statusLine`, plugins, and unrelated hooks.
+
+### Use From Claude Code
+
+In Claude Code, type:
 
 ```text
 /pet
 ```
 
-即可唤出或聚焦桌宠。重复输入 `/pet` 不会稳定多开窗口，已有窗口会被聚焦并短暂播放挥手状态。
+This launches or focuses the pet. If the pet is already open, it will be focused and briefly play the waving state.
 
-也可以用 exe 命令行安装或卸载：
+### Desktop Controls
 
-```powershell
-.\claude-pet-companion.exe --install
-.\claude-pet-companion.exe --uninstall
-```
+- Drag the pet window by holding the transparent area.
+- Right-click the pet, or click the top-right dot button, to open the control panel.
+- Use the panel to switch pets, import a pet folder, scale the pet, toggle always-on-top, or quit.
 
-## Quick Start For Developers
+### Pet Behavior
 
-```powershell
-git clone <your-repo-url> claude-pet-companion
-cd claude-pet-companion
-npm install
-npm run install-hooks
-npm run tauri:dev
-```
+| Claude Code situation | Pet state |
+| --- | --- |
+| Idle session | `idle` |
+| Prompt submitted or tools running | `running` |
+| Permission prompt or elicitation dialog | `waiting` |
+| Tool failure or permission denied | `failed` |
+| Response finished | `review`, then `idle` |
 
-开发模式会打开 Tauri 悬浮窗。发布版构建：
+When Claude Code asks for permission, the pet shows a visible bubble telling you to return to the terminal and choose Yes or No.
 
-```powershell
-npm run tauri:build
-.\src-tauri\target\release\claude-pet-companion.exe
-```
+### Import Pets
 
-如果希望从脚本静默启动发布版：
-
-```powershell
-wscript.exe //B //Nologo .\launch-pet.vbs
-```
-
-## Configuration
-
-首次运行会自动创建：
-
-```text
-%USERPROFILE%\.claude\pet-companion\config.json
-```
-
-默认配置会扫描：
-
-```text
-%USERPROFILE%\.codex\pets
-%USERPROFILE%\.claude\pet-companion\pets
-```
-
-示例见 [config.example.json](./config.example.json)。
-
-## Pet Package Format
-
-一个宠物包是一个文件夹，至少包含：
+A pet package is a folder containing:
 
 ```text
 pet.json
 spritesheet.webp
 ```
 
-`pet.json`:
+Open the pet menu and choose **Import Pet Folder**. Imported pets are copied to:
 
-```json
-{
-  "id": "hiyue",
-  "displayName": "绯月",
-  "description": "Optional description",
-  "spritesheetPath": "spritesheet.webp"
-}
+```text
+%USERPROFILE%\.claude\pet-companion\pets
 ```
 
-Spritesheet 要求：
+### Uninstall Hooks
 
-- 文件尺寸：`1536x1872`
-- 网格：8 列 x 9 行
-- 单帧：`192x208`
-- 行顺序：`idle`、`running-right`、`running-left`、`waving`、`jumping`、`failed`、`waiting`、`running`、`review`
+From the installed application folder:
 
-## Claude Code Hooks
+```powershell
+.\claude-pet-companion.exe --uninstall
+```
 
-安装：
+This removes only this companion's hooks and `/pet` command. It does not remove unrelated Claude Code settings.
+
+## For Developers
+
+### Requirements
+
+- Node.js 20+.
+- Rust stable toolchain.
+- Tauri 2 prerequisites for Windows.
+- Microsoft Edge WebView2 Runtime.
+- Claude Code for end-to-end hook testing.
+
+### Setup
+
+```powershell
+git clone <your-repo-url> claude-pet-companion
+cd claude-pet-companion
+npm install
+```
+
+### Run In Development
+
+```powershell
+npm run tauri:dev
+```
+
+Install hooks during development:
 
 ```powershell
 npm run install-hooks
 ```
 
-卸载：
+Uninstall hooks:
 
 ```powershell
 npm run uninstall-hooks
 ```
 
-状态映射：
-
-| Claude Code event | Pet state |
-| --- | --- |
-| `SessionStart`, `SessionEnd` | `idle` |
-| `UserPromptSubmit`, `UserPromptExpansion`, `PreToolUse`, `PostToolUse`, `PostToolBatch`, `SubagentStart`, `TaskCreated` | `running` |
-| `PermissionRequest`, `Notification(permission_prompt/idle_prompt/elicitation_dialog)`, `Elicitation` | `waiting` |
-| `PostToolUseFailure`, `PermissionDenied`, `StopFailure` | `failed` |
-| `Stop`, `SubagentStop`, `TaskCompleted` | `review` then `idle` |
-
-Hook handler:
-
-```text
-claude-pet-companion.exe --hook
-```
-
-开发环境也保留了 Node 版 handler：
-
-```text
-%USERPROFILE%\.claude\pet-companion\hook\claude-pet-hook.mjs
-```
-
-Runtime state:
-
-```text
-%USERPROFILE%\.claude\pet-companion\runtime\state.json
-```
-
-## Manual Testing
+### Build Release
 
 ```powershell
-node .\hook\claude-pet-hook.mjs --state running --event manual-test
-node .\hook\claude-pet-hook.mjs --state waiting --event permission-test
-node .\hook\claude-pet-hook.mjs --state failed --event failure-test --ttl-ms 3000
+npm run tauri:build
 ```
 
-发布版 exe 测试：
-
-```powershell
-.\src-tauri\target\release\claude-pet-companion.exe --launch --state waving --event manual-launch --ttl-ms 3000
-.\src-tauri\target\release\claude-pet-companion.exe --hook --state waiting --event manual-hook
-```
-
-Simulate a Claude permission notification:
-
-```powershell
-'{"hook_event_name":"Notification","notification_type":"permission_prompt","message":"Do you want to proceed?"}' | node .\hook\claude-pet-hook.mjs
-```
-
-Recent hook events are recorded in:
+Artifacts are generated under:
 
 ```text
-%USERPROFILE%\.claude\pet-companion\runtime\hook-events.jsonl
+src-tauri/target/release/claude-pet-companion.exe
+src-tauri/target/release/bundle/nsis/
+src-tauri/target/release/bundle/msi/
 ```
 
-## Development
+### Executable Commands
+
+The release executable includes the installer, hook handler, launcher, and state writer:
 
 ```powershell
-npm install
-npm run build
-npm run tauri:dev
+.\claude-pet-companion.exe --install
+.\claude-pet-companion.exe --uninstall
+.\claude-pet-companion.exe --launch --state waving --event manual-launch --ttl-ms 3000
+.\claude-pet-companion.exe --hook --state waiting --event manual-hook
 ```
 
-Source layout:
+The Node hook handler remains available for local debugging:
+
+```powershell
+node .\hook\claude-pet-hook.mjs --state waiting --event manual-node-hook
+```
+
+### Simulate Claude Code Events
+
+Permission prompt:
+
+```powershell
+'{"hook_event_name":"Notification","notification_type":"permission_prompt","message":"Do you want to proceed?","tool_name":"Bash"}' | .\src-tauri\target\release\claude-pet-companion.exe --hook
+```
+
+Tool running:
+
+```powershell
+'{"hook_event_name":"PreToolUse","tool_name":"Bash"}' | .\src-tauri\target\release\claude-pet-companion.exe --hook
+```
+
+Failure:
+
+```powershell
+.\src-tauri\target\release\claude-pet-companion.exe --hook --state failed --event manual-failure --ttl-ms 3000
+```
+
+### Project Layout
 
 ```text
 src/                         React overlay UI
 src-tauri/                   Tauri shell and native commands
-hook/claude-pet-hook.mjs     Claude Code hook handler
-scripts/install-hooks.mjs    User-level hook installer
-scripts/uninstall-hooks.mjs  Hook uninstaller
+hook/claude-pet-hook.mjs     Node hook handler for development fallback
+scripts/install-hooks.mjs    Development hook installer
+scripts/uninstall-hooks.mjs  Development hook uninstaller
+config.example.json          Example local config
+launch-pet.vbs               Hidden-window launcher for local release exe
 ```
 
-## Safety Notes
+### Configuration
+
+Runtime config is created at:
+
+```text
+%USERPROFILE%\.claude\pet-companion\config.json
+```
+
+Default pet sources:
+
+```text
+%USERPROFILE%\.codex\pets
+%USERPROFILE%\.claude\pet-companion\pets
+```
+
+See [config.example.json](./config.example.json).
+
+### Pet Package Format
+
+`pet.json`:
+
+```json
+{
+  "id": "hiyue",
+  "displayName": "Hiyue",
+  "description": "Optional description",
+  "spritesheetPath": "spritesheet.webp"
+}
+```
+
+Spritesheet requirements:
+
+- Size: `1536x1872`.
+- Grid: 8 columns x 9 rows.
+- Frame size: `192x208`.
+- Row order: `idle`, `running-right`, `running-left`, `waving`, `jumping`, `failed`, `waiting`, `running`, `review`.
+
+### Hook Mapping
+
+| Claude Code event | State | Notes |
+| --- | --- | --- |
+| `SessionStart`, `SessionEnd` | `idle` | Session starts or ends. |
+| `UserPromptSubmit`, `UserPromptExpansion` | `running` | User input has been submitted. |
+| `PreToolUse`, `PostToolUse`, `PostToolBatch` | `running` | Tool execution activity. |
+| `SubagentStart`, `TaskCreated` | `running` | Background or delegated work starts. |
+| `PermissionRequest`, `Notification(permission_prompt)`, `Elicitation` | `waiting` | User action is needed. |
+| `PostToolUseFailure`, `PermissionDenied`, `StopFailure` | `failed` | Error or denied action. |
+| `Stop`, `SubagentStop`, `TaskCompleted` | `review` | Completed response, then returns to idle. |
+
+### Safety Notes
 
 - Do not commit `config.json`, `runtime/`, `pets/`, `dist/`, `node_modules/`, or `src-tauri/target/`.
-- Do not commit private Claude settings or secrets.
-- The installer writes only user-level hooks and backs up settings first.
-- The uninstaller removes only handlers whose command points to `claude-pet-hook.mjs`.
+- Do not commit private `~/.claude/settings.json` files or secrets.
+- The installer backs up settings before modifying hooks.
+- The uninstaller removes only commands containing `claude-pet-companion` or `claude-pet-hook.mjs`.
+
+## Troubleshooting
+
+### `/pet` Does Not Appear
+
+Run:
+
+```powershell
+.\claude-pet-companion.exe --install
+```
+
+Then restart Claude Code or start a new session.
+
+### Pet Does Not React To Permission Prompts
+
+Check the state file:
+
+```powershell
+Get-Content "$env:USERPROFILE\.claude\pet-companion\runtime\state.json"
+```
+
+For permission prompts, it should contain `waiting` and `notification:permission_prompt`.
+
+### A Terminal Window Appears
+
+Use the release executable or installer. Development commands may open terminals, but the release app is built as a Windows GUI subsystem application.
+
+## License
+
+MIT
