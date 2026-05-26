@@ -212,6 +212,62 @@ src-tauri/target/release/bundle/nsis/
 src-tauri/target/release/bundle/msi/
 ```
 
+### 发布 GitHub Release
+
+建议用 GitHub Release 发布构建好的二进制文件。不要把生成的安装器、本地配置、运行状态或导入的宠物包提交进仓库。
+
+推荐 tag 格式：
+
+```text
+v0.1.0
+```
+
+发布版构建命令：
+
+```powershell
+npm install
+npm run tauri:build
+```
+
+上传这些文件到 GitHub Release：
+
+```text
+src-tauri/target/release/bundle/nsis/Claude Pet Companion_0.1.0_x64-setup.exe
+src-tauri/target/release/bundle/msi/Claude Pet Companion_0.1.0_x64_en-US.msi
+```
+
+可选上传便携版 exe：
+
+```text
+src-tauri/target/release/claude-pet-companion.exe
+```
+
+Release notes 可以这样写：
+
+```markdown
+## Claude Pet Companion v0.1.0
+
+### 新增
+- 透明、置顶的 Claude Code 桌面宠物伴侣。
+- Claude Code 用户级 hooks，支持空闲、运行中、等待、失败和完成回顾状态。
+- `/pet` 命令集成，支持唤出、导入、切换、同步和桌宠创建流程。
+- 中文/英文 UI 切换。
+- Codex 兼容宠物包导入，并可从 `~/.codex/pets` 同步 Codex 跟宠。
+
+### 安装
+下载并运行 `Claude Pet Companion_0.1.0_x64-setup.exe`。
+```
+
+发布前建议验证：
+
+```powershell
+npm run build
+cd src-tauri
+cargo check
+cd ..
+npm run tauri:build
+```
+
 ### exe 命令
 
 发布版 exe 内置安装器、hook handler、启动器和状态写入能力：
