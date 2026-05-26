@@ -52,9 +52,12 @@ Claude Pet Companion_0.1.0_x64-setup.exe
 Then open `claude-pet-companion.exe`. On first launch it will:
 
 - Create `~/.claude/pet-companion/config.json`.
+- Copy the running executable to `%USERPROFILE%\.claude\pet-companion\bin\claude-pet-companion.exe`.
 - Install Claude Code user-level hooks.
 - Create the Claude Code personal command `~/.claude/commands/pet.md`.
 - Launch the transparent desktop pet window.
+
+This stable copy lets portable downloads keep working even if the original file was launched from Downloads or a temporary folder.
 
 The installer keeps your existing Claude settings, including `statusLine`, plugins, and unrelated hooks.
 
@@ -72,7 +75,7 @@ With arguments, `/pet` becomes a pet workflow command:
 
 ```text
 /pet make a tiny moon rabbit with a brass staff
-/pet import C:\Users\ASUS\Downloads\my-pet
+/pet import %USERPROFILE%\Downloads\my-pet
 /pet switch hiyue
 /pet sync
 ```
@@ -244,6 +247,8 @@ Optional portable binary:
 src-tauri/target/release/claude-pet-companion.exe
 ```
 
+The portable executable self-installs a stable copy to `%USERPROFILE%\.claude\pet-companion\bin\claude-pet-companion.exe` on first launch or `--install`; hooks and `/pet` point to that copy, not to the developer build path or the user's download folder.
+
 Suggested release notes:
 
 ```markdown
@@ -279,7 +284,7 @@ The release executable includes the installer, hook handler, launcher, and state
 .\claude-pet-companion.exe --uninstall
 .\claude-pet-companion.exe --launch --state waving --event manual-launch --ttl-ms 3000
 .\claude-pet-companion.exe --hook --state waiting --event manual-hook
-.\claude-pet-companion.exe --import-pet "C:\path\to\pet-package"
+.\claude-pet-companion.exe --import-pet "$env:USERPROFILE\Downloads\pet-package"
 .\claude-pet-companion.exe --set-pet hiyue
 .\claude-pet-companion.exe --sync-codex-pets
 ```
@@ -295,19 +300,19 @@ node .\hook\claude-pet-hook.mjs --state waiting --event manual-node-hook
 Permission prompt:
 
 ```powershell
-'{"hook_event_name":"Notification","notification_type":"permission_prompt","message":"Do you want to proceed?","tool_name":"Bash"}' | .\src-tauri\target\release\claude-pet-companion.exe --hook
+'{"hook_event_name":"Notification","notification_type":"permission_prompt","message":"Do you want to proceed?","tool_name":"Bash"}' | .\claude-pet-companion.exe --hook
 ```
 
 Tool running:
 
 ```powershell
-'{"hook_event_name":"PreToolUse","tool_name":"Bash"}' | .\src-tauri\target\release\claude-pet-companion.exe --hook
+'{"hook_event_name":"PreToolUse","tool_name":"Bash"}' | .\claude-pet-companion.exe --hook
 ```
 
 Failure:
 
 ```powershell
-.\src-tauri\target\release\claude-pet-companion.exe --hook --state failed --event manual-failure --ttl-ms 3000
+.\claude-pet-companion.exe --hook --state failed --event manual-failure --ttl-ms 3000
 ```
 
 ### Project Layout

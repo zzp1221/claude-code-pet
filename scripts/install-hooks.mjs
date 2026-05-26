@@ -10,7 +10,8 @@ const companionDir = join(claudeDir, "pet-companion");
 const settingsPath = join(claudeDir, "settings.json");
 const backupDir = join(claudeDir, "backups");
 const hookScript = join(companionDir, "hook", "claude-pet-hook.mjs");
-const releaseExe = join(companionDir, "src-tauri", "target", "release", "claude-pet-companion.exe");
+const stableExe = join(companionDir, "bin", "claude-pet-companion.exe");
+const releaseExe = join(process.cwd(), "src-tauri", "target", "release", "claude-pet-companion.exe");
 const nodeExe = process.execPath;
 
 const EVENT_MAP = [
@@ -41,13 +42,24 @@ function argsFor(state, event, ttlMs) {
   return args;
 }
 
-async function hasReleaseExe() {
-  await access(releaseExe);
-  return true;
+async function findHookExe() {
+  try {
+    await access(stableExe);
+    return stableExe;
+  } catch {}
+
+  try {
+    await access(releaseExe);
+    await mkdir(join(companionDir, "bin"), { recursive: true });
+    await copyFile(releaseExe, stableExe);
+    return stableExe;
+  } catch {
+    return null;
+  }
 }
 
-function commandHookFor(state, event, ttlMs) {
-  const quoted = `"${releaseExe.replaceAll("\\", "/")}"`;
+function commandHookFor(exePath, state, event, ttlMs) {
+  const quoted = `"${exePath.replaceAll("\\", "/")}"`;
   let command = `${quoted} --hook --state ${state} --event ${event}`;
   if (ttlMs) command += ` --ttl-ms ${ttlMs}`;
   return command;
@@ -70,7 +82,8 @@ function withoutExistingPetHook(hooks) {
     const hook = entry?.hooks?.[0] ?? entry;
     const command = hook?.command ?? "";
     const args = Array.isArray(hook?.args) ? hook.args.join(" ") : "";
-    return !`${command} ${args}`.includes("claude-pet-hook.mjs");
+    const text = `${command} ${args}`;
+    return !text.includes("claude-pet-hook.mjs") && !text.includes("claude-pet-companion");
   });
 }
 
@@ -87,14 +100,14 @@ async function main() {
   for (const [eventName, state, event, ttlMs] of EVENT_MAP) {
     const hooks = normalizeEventHooks(settings, eventName);
     const filtered = withoutExistingPetHook(hooks);
-    const useReleaseExe = await hasReleaseExe().catch(() => false);
+    const exePath = await findHookExe();
     filtered.push({
       matcher: "",
       hooks: [
-        useReleaseExe
+        exePath
           ? {
               type: "command",
-              command: commandHookFor(state, event, ttlMs),
+              command: commandHookFor(exePath, state, event, ttlMs),
               async: true,
               timeout: 5
             }

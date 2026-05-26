@@ -52,9 +52,12 @@ Claude Pet Companion_0.1.0_x64-setup.exe
 安装后打开 `claude-pet-companion.exe`。首次启动会自动完成：
 
 - 创建 `~/.claude/pet-companion/config.json`。
+- 把当前 exe 复制到稳定位置 `%USERPROFILE%\.claude\pet-companion\bin\claude-pet-companion.exe`。
 - 写入 Claude Code 用户级 hooks。
 - 创建 Claude Code 个人命令 `~/.claude/commands/pet.md`。
 - 启动透明桌面宠物窗口。
+
+这个稳定副本可以保证便携版 exe 即使最初从 Downloads 或临时目录启动，后续 hooks 和 `/pet` 也不会因为原文件被移动而失效。
 
 安装过程会保留你已有的 Claude Code 配置，包括 `statusLine`、插件和其它无关 hooks。
 
@@ -72,7 +75,7 @@ Claude Pet Companion_0.1.0_x64-setup.exe
 
 ```text
 /pet 做一只拿金箍棒的月亮兔桌宠
-/pet import C:\Users\ASUS\Downloads\my-pet
+/pet import %USERPROFILE%\Downloads\my-pet
 /pet switch hiyue
 /pet sync
 ```
@@ -244,6 +247,8 @@ src-tauri/target/release/bundle/msi/Claude Pet Companion_0.1.0_x64_en-US.msi
 src-tauri/target/release/claude-pet-companion.exe
 ```
 
+便携版 exe 首次启动或执行 `--install` 时，会自复制到 `%USERPROFILE%\.claude\pet-companion\bin\claude-pet-companion.exe`。hooks 和 `/pet` 会指向这个稳定副本，而不是开发机路径或用户的下载目录。
+
 Release notes 可以这样写：
 
 ```markdown
@@ -279,7 +284,7 @@ npm run tauri:build
 .\claude-pet-companion.exe --uninstall
 .\claude-pet-companion.exe --launch --state waving --event manual-launch --ttl-ms 3000
 .\claude-pet-companion.exe --hook --state waiting --event manual-hook
-.\claude-pet-companion.exe --import-pet "C:\path\to\pet-package"
+.\claude-pet-companion.exe --import-pet "$env:USERPROFILE\Downloads\pet-package"
 .\claude-pet-companion.exe --set-pet hiyue
 .\claude-pet-companion.exe --sync-codex-pets
 ```
@@ -295,19 +300,19 @@ node .\hook\claude-pet-hook.mjs --state waiting --event manual-node-hook
 模拟权限提示：
 
 ```powershell
-'{"hook_event_name":"Notification","notification_type":"permission_prompt","message":"Do you want to proceed?","tool_name":"Bash"}' | .\src-tauri\target\release\claude-pet-companion.exe --hook
+'{"hook_event_name":"Notification","notification_type":"permission_prompt","message":"Do you want to proceed?","tool_name":"Bash"}' | .\claude-pet-companion.exe --hook
 ```
 
 模拟工具运行：
 
 ```powershell
-'{"hook_event_name":"PreToolUse","tool_name":"Bash"}' | .\src-tauri\target\release\claude-pet-companion.exe --hook
+'{"hook_event_name":"PreToolUse","tool_name":"Bash"}' | .\claude-pet-companion.exe --hook
 ```
 
 模拟失败：
 
 ```powershell
-.\src-tauri\target\release\claude-pet-companion.exe --hook --state failed --event manual-failure --ttl-ms 3000
+.\claude-pet-companion.exe --hook --state failed --event manual-failure --ttl-ms 3000
 ```
 
 ### 项目结构

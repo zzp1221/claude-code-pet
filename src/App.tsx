@@ -261,6 +261,7 @@ export default function App() {
         const loaded = await invoke<CompanionConfig>("get_config");
         if (cancelled) return;
         setConfig(loaded);
+        await invoke("install_app_copy").catch(() => undefined);
         await invoke<PetInfo[]>("sync_codex_pets").catch(() => []);
         await refreshPets(loaded.activePetId);
       } catch (loadError) {

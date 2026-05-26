@@ -98,6 +98,14 @@ fn companion_pets_dir() -> Result<PathBuf, String> {
     Ok(companion_dir()?.join("pets"))
 }
 
+fn companion_bin_dir() -> Result<PathBuf, String> {
+    Ok(companion_dir()?.join("bin"))
+}
+
+fn installed_exe_path() -> Result<PathBuf, String> {
+    Ok(companion_bin_dir()?.join("claude-pet-companion.exe"))
+}
+
 fn codex_pets_dir() -> Result<PathBuf, String> {
     Ok(home_dir()?.join(".codex/pets"))
 }
@@ -128,6 +136,39 @@ fn launcher_script_path() -> Result<PathBuf, String> {
 
 fn current_exe_path() -> Result<PathBuf, String> {
     env::current_exe().map_err(|error| error.to_string())
+}
+
+fn same_file_path(left: &Path, right: &Path) -> bool {
+    let left = left.canonicalize().unwrap_or_else(|_| left.to_path_buf());
+    let right = right.canonicalize().unwrap_or_else(|_| right.to_path_buf());
+    left == right
+}
+
+fn ensure_stable_exe_copy() -> Result<PathBuf, String> {
+    let current = current_exe_path()?;
+    let target = installed_exe_path()?;
+    if same_file_path(&current, &target) {
+        return Ok(target);
+    }
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    fs::copy(&current, &target).map_err(|error| {
+        format!(
+            "Failed to install executable to {}: {error}",
+            target.to_string_lossy()
+        )
+    })?;
+    Ok(target)
+}
+
+fn hook_exe_path() -> Result<PathBuf, String> {
+    let installed = installed_exe_path()?;
+    if installed.is_file() {
+        Ok(installed)
+    } else {
+        current_exe_path()
+    }
 }
 
 fn claude_settings_path() -> Result<PathBuf, String> {
@@ -327,12 +368,15 @@ fn command_arg(path: &Path) -> String {
 }
 
 fn vb_string(value: &Path) -> String {
-    value.to_string_lossy().replace('"', "\"\"")
+    value
+        .to_string_lossy()
+        .replace('/', "\\")
+        .replace('"', "\"\"")
 }
 
 fn install_launcher_script_inner() -> Result<PathBuf, String> {
     let script_path = launcher_script_path()?;
-    let exe = current_exe_path()?;
+    let exe = hook_exe_path()?;
     let state = state_path()?;
     if let Some(parent) = script_path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -422,7 +466,7 @@ fn install_hooks_inner(announce: bool) -> Result<(), String> {
     if settings.get("hooks").and_then(Value::as_object).is_none() {
         settings["hooks"] = json!({});
     }
-    let exe = current_exe_path()?;
+    let exe = hook_exe_path()?;
     let hooks = settings
         .get_mut("hooks")
         .and_then(Value::as_object_mut)
@@ -483,7 +527,7 @@ fn uninstall_hooks_inner() -> Result<(), String> {
 fn install_pet_command_inner() -> Result<(), String> {
     let command_dir = claude_commands_dir()?;
     fs::create_dir_all(&command_dir).map_err(|error| error.to_string())?;
-    let exe = current_exe_path()?;
+    let exe = hook_exe_path()?;
     let launcher = install_launcher_script_inner()?;
     let command = format!(
         r#"---
@@ -519,7 +563,7 @@ Common intents:
 fn install_pet_skill_inner() -> Result<(), String> {
     let skill_dir = claude_skills_dir()?.join("claude-pet-companion");
     fs::create_dir_all(&skill_dir).map_err(|error| error.to_string())?;
-    let exe = current_exe_path()?;
+    let exe = hook_exe_path()?;
     let launcher = install_launcher_script_inner()?;
     let skill = format!(
         r#"---
@@ -630,6 +674,7 @@ Then tell the user that Codex-installed pets have been scanned and can be select
 }
 
 fn ensure_user_installation() -> Result<(), String> {
+    let _ = ensure_stable_exe_copy()?;
     let _ = read_config_inner()?;
     install_hooks_inner(false)
 }
@@ -759,7 +804,7 @@ fn spawn_gui_detached(exe: &Path, args: &[&str]) -> Result<(), String> {
 }
 
 fn spawn_ttl_reset(ttl_ms: u64, expected_updated_at: &str) -> Result<(), String> {
-    let exe = current_exe_path()?;
+    let exe = hook_exe_path()?;
     spawn_command_hidden(
         &exe,
         &[
@@ -1164,13 +1209,14 @@ fn launch_existing_or_new(args: &[String]) -> Result<(), String> {
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(3000);
     write_state_inner(&state, &event, ttl_ms, None)?;
-    let exe = current_exe_path()?;
+    let exe = hook_exe_path()?;
     spawn_gui_detached(&exe, &["--show", "--force-position", "--focus"])?;
     Ok(())
 }
 
 fn run_cli(args: &[String]) -> Result<bool, String> {
     if args.iter().any(|arg| arg == "--install") {
+        let _ = ensure_stable_exe_copy()?;
         let _ = read_config_inner()?;
         install_hooks_inner(true)?;
         return Ok(true);
@@ -1277,6 +1323,12 @@ fn sync_codex_pets() -> Result<Vec<PetInfo>, String> {
 }
 
 #[tauri::command]
+fn install_app_copy() -> Result<(), String> {
+    let _ = ensure_stable_exe_copy()?;
+    install_hooks_inner(false)
+}
+
+#[tauri::command]
 fn write_pet_heartbeat() -> Result<(), String> {
     write_json_file(
         &heartbeat_path()?,
@@ -1359,6 +1411,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             close_app,
             get_config,
+            install_app_copy,
             import_pet,
             list_pets,
             load_image_data_url,
