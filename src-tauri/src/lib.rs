@@ -108,6 +108,18 @@ fn state_path() -> Result<PathBuf, String> {
     Ok(companion_dir()?.join("runtime/state.json"))
 }
 
+fn approval_dir() -> Result<PathBuf, String> {
+    Ok(companion_dir()?.join("runtime/approvals"))
+}
+
+fn approval_path(id: &str) -> Result<PathBuf, String> {
+    Ok(approval_dir()?.join(format!("{id}.json")))
+}
+
+fn launcher_script_path() -> Result<PathBuf, String> {
+    Ok(companion_dir()?.join("runtime/launch-pet.vbs"))
+}
+
 fn current_exe_path() -> Result<PathBuf, String> {
     env::current_exe().map_err(|error| error.to_string())
 }
@@ -229,6 +241,52 @@ fn read_json_file(path: &Path) -> Result<Value, String> {
     serde_json::from_str(&text).map_err(|error| error.to_string())
 }
 
+fn sanitize_id(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn compact_json(value: &Value, limit: usize) -> String {
+    let text = match value {
+        Value::String(text) => text.clone(),
+        _ => serde_json::to_string(value).unwrap_or_else(|_| String::new()),
+    };
+    let text = text.replace('\n', " ").replace('\r', " ");
+    if text.chars().count() > limit {
+        format!("{}...", text.chars().take(limit).collect::<String>())
+    } else {
+        text
+    }
+}
+
+fn tool_input_summary(input: Option<&Value>) -> Option<String> {
+    let value = input?;
+    for key in ["tool_input", "toolInput", "input", "parameters"] {
+        if let Some(tool_input) = value.get(key) {
+            if let Some(command) = tool_input.get("command").and_then(Value::as_str) {
+                return Some(command.to_string());
+            }
+            if let Some(path) = tool_input
+                .get("file_path")
+                .or_else(|| tool_input.get("path"))
+                .and_then(Value::as_str)
+            {
+                return Some(path.to_string());
+            }
+            return Some(compact_json(tool_input, 220));
+        }
+    }
+    value.get("message").and_then(Value::as_str).map(str::to_string)
+}
+
 fn write_json_file(path: &Path, value: &Value) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -258,6 +316,51 @@ fn command_arg(path: &Path) -> String {
     format!("\"{}\"", path_text(path))
 }
 
+fn vb_string(value: &Path) -> String {
+    value.to_string_lossy().replace('"', "\"\"")
+}
+
+fn install_launcher_script_inner() -> Result<PathBuf, String> {
+    let script_path = launcher_script_path()?;
+    let exe = current_exe_path()?;
+    let state = state_path()?;
+    if let Some(parent) = script_path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let script = format!(
+        r#"Option Explicit
+
+Dim shell, fso, exePath, statePath, runtimeDir, payload, file
+Set shell = CreateObject("WScript.Shell")
+Set fso = CreateObject("Scripting.FileSystemObject")
+
+exePath = "{exe}"
+statePath = "{state}"
+runtimeDir = fso.GetParentFolderName(statePath)
+
+If Not fso.FolderExists(runtimeDir) Then
+  fso.CreateFolder runtimeDir
+End If
+
+payload = "{{""state"":""waving"",""event"":""slash-command"",""updatedAt"":""" & CStr(DateDiff("s", #1/1/1970#, Now())) & "000"",""ttlMs"":3000,""source"":""claude-pet-launcher""}}"
+Set file = fso.CreateTextFile(statePath, True, False)
+file.Write payload
+file.Close
+
+If Not fso.FileExists(exePath) Then
+  MsgBox "Claude Pet Companion executable was not found:" & vbCrLf & exePath, vbExclamation, "Claude Pet Companion"
+  WScript.Quit 1
+End If
+
+shell.Run Chr(34) & exePath & Chr(34) & " --show", 0, False
+"#,
+        exe = vb_string(&exe),
+        state = vb_string(&state)
+    );
+    fs::write(&script_path, script).map_err(|error| error.to_string())?;
+    Ok(script_path)
+}
+
 fn hook_command_for(exe: &Path, state: &str, event: &str, ttl_ms: u64) -> String {
     let mut command = format!(
         "{} --hook --state {} --event {}",
@@ -284,21 +387,22 @@ fn is_pet_hook(entry: &Value) -> bool {
     })
 }
 
-fn hook_entry(exe: &Path, state: &str, event: &str, ttl_ms: u64) -> Value {
+fn hook_entry(exe: &Path, event_name: &str, state: &str, event: &str, ttl_ms: u64) -> Value {
+    let waits_for_decision = event_name == "PreToolUse";
     json!({
         "matcher": "",
         "hooks": [
             {
                 "type": "command",
                 "command": hook_command_for(exe, state, event, ttl_ms),
-                "timeout": 5,
-                "async": true
+                "timeout": if waits_for_decision { 130 } else { 5 },
+                "async": !waits_for_decision
             }
         ]
     })
 }
 
-fn install_hooks_inner() -> Result<(), String> {
+fn install_hooks_inner(announce: bool) -> Result<(), String> {
     let settings_path = claude_settings_path()?;
     backup_settings("install")?;
     let mut settings = read_json_file(&settings_path)?;
@@ -322,12 +426,14 @@ fn install_hooks_inner() -> Result<(), String> {
             other => vec![other],
         };
         entries.retain(|entry| !is_pet_hook(entry));
-        entries.push(hook_entry(&exe, state, event, *ttl_ms));
+        entries.push(hook_entry(&exe, event_name, state, event, *ttl_ms));
         hooks.insert((*event_name).to_string(), Value::Array(entries));
     }
 
     write_json_file(&settings_path, &settings)?;
-    write_state_inner("idle", "installed", 0, None)?;
+    if announce {
+        write_state_inner("idle", "installed", 0, None)?;
+    }
     install_pet_command_inner()?;
     install_pet_skill_inner()?;
     Ok(())
@@ -368,14 +474,15 @@ fn install_pet_command_inner() -> Result<(), String> {
     let command_dir = claude_commands_dir()?;
     fs::create_dir_all(&command_dir).map_err(|error| error.to_string())?;
     let exe = current_exe_path()?;
+    let launcher = install_launcher_script_inner()?;
     let command = format!(
         r#"---
 description: Launch/focus Claude Pet Companion, or create/import a recognizable desktop pet when arguments are provided.
 argument-hint: [pet description | import <folder> | switch <pet-id> | sync]
-allowed-tools: Bash({} *), Read, Write, Edit, MultiEdit, Glob, Grep, LS
+allowed-tools: Bash(wscript.exe *), Bash({} *), Read, Write, Edit, MultiEdit, Glob, Grep, LS
 ---
 
-!{} --launch --state waving --event slash-command --ttl-ms 3000
+!wscript.exe {}
 
 Arguments: $ARGUMENTS
 
@@ -385,13 +492,14 @@ If `Arguments` is not empty, treat it as a Claude Pet Companion request. Follow 
 
 Common intents:
 - `import <folder>`: validate the folder contains `pet.json` and `spritesheet.webp`, then run `{exe} --import-pet "<folder>"`.
-- `switch <pet-id>`: run `{exe} --set-pet <pet-id> --launch --state waving --event pet-switched --ttl-ms 3000`.
+- `switch <pet-id>`: run `{exe} --set-pet <pet-id>`, then run `wscript.exe {launcher}`.
 - `sync` or `scan codex`: run `{exe} --sync-codex-pets` so pets installed in Codex become selectable here.
 - Any mascot or character description: create a Codex-compatible pet package that this companion can recognize, then import it with `{exe} --import-pet "<package-folder>"`.
 "#,
         path_text(&exe),
-        command_arg(&exe),
-        exe = command_arg(&exe)
+        command_arg(&launcher),
+        exe = command_arg(&exe),
+        launcher = command_arg(&launcher)
     );
     fs::write(command_dir.join("pet.md"), command).map_err(|error| error.to_string())?;
     install_pet_skill_inner()?;
@@ -402,6 +510,7 @@ fn install_pet_skill_inner() -> Result<(), String> {
     let skill_dir = claude_skills_dir()?.join("claude-pet-companion");
     fs::create_dir_all(&skill_dir).map_err(|error| error.to_string())?;
     let exe = current_exe_path()?;
+    let launcher = install_launcher_script_inner()?;
     let skill = format!(
         r#"---
 name: claude-pet-companion
@@ -425,7 +534,8 @@ Useful commands:
 ```powershell
 {exe} --launch --state waving --event slash-command --ttl-ms 3000
 {exe} --import-pet "<absolute pet package folder>"
-{exe} --set-pet <pet-id> --launch --state waving --event pet-switched --ttl-ms 3000
+{exe} --set-pet <pet-id>
+wscript.exe {launcher}
 {exe} --sync-codex-pets
 ```
 
@@ -486,7 +596,8 @@ If image generation is not available in the current Claude Code environment, ask
 Run:
 
 ```powershell
-{exe} --set-pet <pet-id> --launch --state waving --event pet-switched --ttl-ms 3000
+{exe} --set-pet <pet-id>
+wscript.exe {launcher}
 ```
 
 If the pet id is unknown, inspect `~/.codex/pets` and `~/.claude/pet-companion/pets`.
@@ -501,7 +612,8 @@ Run:
 
 Then tell the user that Codex-installed pets have been scanned and can be selected from the companion menu.
 "#,
-        exe = command_arg(&exe)
+        exe = command_arg(&exe),
+        launcher = command_arg(&launcher)
     );
     fs::write(skill_dir.join("SKILL.md"), skill).map_err(|error| error.to_string())?;
     Ok(())
@@ -509,7 +621,7 @@ Then tell the user that Codex-installed pets have been scanned and can be select
 
 fn ensure_user_installation() -> Result<(), String> {
     let _ = read_config_inner()?;
-    install_hooks_inner()
+    install_hooks_inner(false)
 }
 
 fn now_iso_like() -> String {
@@ -567,6 +679,27 @@ fn spawn_command_hidden(exe: &Path, args: &[&str]) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
+#[cfg(windows)]
+fn spawn_gui_detached(exe: &Path, args: &[&str]) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x01000000;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
+    const DETACHED_PROCESS: u32 = 0x00000008;
+    let spawn = |flags| {
+        Command::new(exe)
+            .args(args)
+            .creation_flags(flags)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+    };
+    spawn(CREATE_BREAKAWAY_FROM_JOB | CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS)
+        .or_else(|_| spawn(CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS))
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
 #[cfg(not(windows))]
 fn spawn_command_hidden(exe: &Path, args: &[&str]) -> Result<(), String> {
     Command::new(exe)
@@ -577,6 +710,11 @@ fn spawn_command_hidden(exe: &Path, args: &[&str]) -> Result<(), String> {
         .spawn()
         .map(|_| ())
         .map_err(|error| error.to_string())
+}
+
+#[cfg(not(windows))]
+fn spawn_gui_detached(exe: &Path, args: &[&str]) -> Result<(), String> {
+    spawn_command_hidden(exe, args)
 }
 
 fn spawn_ttl_reset(ttl_ms: u64, expected_updated_at: &str) -> Result<(), String> {
@@ -644,7 +782,10 @@ fn infer_hook_state(input: Option<&Value>) -> (&'static str, String, u64) {
                 "auth_success" | "elicitation_complete" | "elicitation_response" => {
                     ("idle", format!("notification:{notification_type}"), 0)
                 }
-                _ => ("waiting", format!("notification:{notification_type}"), 0),
+                "permission_prompt" | "elicitation_dialog" => {
+                    ("waiting", format!("notification:{notification_type}"), 0)
+                }
+                _ => ("waiting", format!("notification:{notification_type}"), 8000),
             }
         }
         Some("PreToolUse") => {
@@ -666,8 +807,125 @@ fn infer_hook_state(input: Option<&Value>) -> (&'static str, String, u64) {
     }
 }
 
+fn approval_id(input: Option<&Value>) -> String {
+    let session = input
+        .and_then(|value| value.get("session_id").or_else(|| value.get("sessionId")))
+        .and_then(Value::as_str)
+        .unwrap_or("session");
+    let tool = input
+        .and_then(|value| value.get("tool_name").or_else(|| value.get("toolName")))
+        .and_then(Value::as_str)
+        .unwrap_or("tool");
+    sanitize_id(&format!("{session}-{tool}-{}", now_iso_like()))
+}
+
+fn is_decision_tool(input: Option<&Value>) -> bool {
+    let Some(value) = input else {
+        return false;
+    };
+    if hook_event_name(input) != Some("PreToolUse") {
+        return false;
+    }
+    matches!(
+        value
+            .get("tool_name")
+            .or_else(|| value.get("toolName"))
+            .and_then(Value::as_str),
+        Some("Bash" | "Edit" | "MultiEdit" | "Write" | "NotebookEdit")
+    )
+}
+
+fn wait_for_approval(id: &str, timeout_ms: u64) -> Result<Option<String>, String> {
+    let path = approval_path(id)?;
+    let started = SystemTime::now();
+    loop {
+        if path.is_file() {
+            let value = read_json_file(&path)?;
+            let decision = value
+                .get("decision")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let _ = fs::remove_file(path);
+            return Ok(decision);
+        }
+        let elapsed = SystemTime::now()
+            .duration_since(started)
+            .map_err(|error| error.to_string())?
+            .as_millis() as u64;
+        if elapsed >= timeout_ms {
+            return Ok(None);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+}
+
 fn run_hook(args: &[String]) -> Result<(), String> {
     let input = read_stdin_json();
+    if is_decision_tool(input.as_ref()) {
+        let id = approval_id(input.as_ref());
+        let tool_name = input
+            .as_ref()
+            .and_then(|value| value.get("tool_name").or_else(|| value.get("toolName")))
+            .and_then(Value::as_str)
+            .unwrap_or("tool")
+            .to_string();
+        write_state_inner(
+            "waiting",
+            "approval-request",
+            0,
+            Some(json!({
+                "approvalId": id,
+                "approvalKind": "tool",
+                "requiresDecision": true,
+                "toolName": tool_name,
+                "toolInputSummary": tool_input_summary(input.as_ref()),
+                "message": tool_input_summary(input.as_ref())
+            })),
+        )?;
+        match wait_for_approval(&id, 120_000)? {
+            Some(decision) if decision == "allow" => {
+                println!(
+                    "{}",
+                    json!({
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": "allow",
+                            "permissionDecisionReason": "Approved from Claude Pet Companion"
+                        }
+                    })
+                );
+                write_state_inner("running", "approval-allowed", 0, Some(json!({ "approvalId": id })))?;
+            }
+            Some(_) => {
+                println!(
+                    "{}",
+                    json!({
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": "deny",
+                            "permissionDecisionReason": "Denied from Claude Pet Companion"
+                        }
+                    })
+                );
+                write_state_inner("idle", "approval-denied", 0, Some(json!({ "approvalId": id })))?;
+            }
+            None => {
+                println!(
+                    "{}",
+                    json!({
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": "deny",
+                            "permissionDecisionReason": "Timed out waiting for Claude Pet Companion approval"
+                        }
+                    })
+                );
+                write_state_inner("idle", "approval-timeout", 0, Some(json!({ "approvalId": id })))?;
+            }
+        }
+        return Ok(());
+    }
+
     let (inferred_state, inferred_event, inferred_ttl) = infer_hook_state(input.as_ref());
     let state = arg_value(args, "--state").unwrap_or_else(|| inferred_state.to_string());
     let event = match hook_event_name(input.as_ref()) {
@@ -682,7 +940,9 @@ fn run_hook(args: &[String]) -> Result<(), String> {
             "hookEventName": hook_event_name(Some(&value)),
             "toolName": value.get("tool_name").or_else(|| value.get("toolName")).cloned().unwrap_or(Value::Null),
             "notificationType": value.get("notification_type").cloned().unwrap_or(Value::Null),
-            "sessionId": value.get("session_id").or_else(|| value.get("sessionId")).cloned().unwrap_or(Value::Null)
+            "sessionId": value.get("session_id").or_else(|| value.get("sessionId")).cloned().unwrap_or(Value::Null),
+            "message": value.get("message").cloned().unwrap_or(Value::Null),
+            "toolInputSummary": tool_input_summary(Some(&value)).map(Value::String).unwrap_or(Value::Null)
         })
     });
     write_state_inner(&state, &event, ttl_ms, extra)
@@ -806,14 +1066,14 @@ fn launch_existing_or_new(args: &[String]) -> Result<(), String> {
         .unwrap_or(3000);
     write_state_inner(&state, &event, ttl_ms, None)?;
     let exe = current_exe_path()?;
-    spawn_command_hidden(&exe, &["--show"])?;
+    spawn_gui_detached(&exe, &["--show"])?;
     Ok(())
 }
 
 fn run_cli(args: &[String]) -> Result<bool, String> {
     if args.iter().any(|arg| arg == "--install") {
         let _ = read_config_inner()?;
-        install_hooks_inner()?;
+        install_hooks_inner(true)?;
         return Ok(true);
     }
     if args.iter().any(|arg| arg == "--uninstall") {
@@ -918,6 +1178,19 @@ fn sync_codex_pets() -> Result<Vec<PetInfo>, String> {
 }
 
 #[tauri::command]
+fn write_approval_decision(approval_id: String, decision: String) -> Result<(), String> {
+    let id = sanitize_id(&approval_id);
+    let decision = if decision == "allow" { "allow" } else { "deny" };
+    write_json_file(
+        &approval_path(&id)?,
+        &json!({
+            "decision": decision,
+            "updatedAt": now_iso_like()
+        }),
+    )
+}
+
+#[tauri::command]
 fn start_window_drag(app: AppHandle) -> Result<(), String> {
     let window = app
         .get_webview_window("main")
@@ -976,7 +1249,8 @@ pub fn run() {
             read_state,
             save_config,
             start_window_drag,
-            sync_codex_pets
+            sync_codex_pets,
+            write_approval_decision
         ])
         .run(tauri::generate_context!())
         .expect("error while running Claude Pet Companion");

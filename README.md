@@ -107,6 +107,8 @@ The prompt bubble, menu labels, status captions, and import dialog title follow 
 
 When Claude Code asks for permission, the pet shows a visible bubble telling you to return to the terminal and choose Yes or No.
 
+For `PreToolUse` permission checks, the bubble can also show the tool name and a compact summary of the command, file, or input being requested. The **Allow** and **Deny** buttons write Claude Code's hook response using `hookSpecificOutput.permissionDecision`, so the terminal prompt can continue from the pet decision. Non-decision notifications can be dismissed from the bubble and will also expire automatically.
+
 The overlay also has a small Codex-like motion layer:
 
 - `/pet` launch briefly plays `waving`.
@@ -417,6 +419,22 @@ Run:
 
 Then restart Claude Code or start a new session.
 
+### `/pet` Says Started But No Pet Appears
+
+Run the installer command again so the `/pet` command uses the launcher script:
+
+```powershell
+.\claude-pet-companion.exe --install
+```
+
+The command should contain:
+
+```text
+!wscript.exe "...\.claude\pet-companion\runtime\launch-pet.vbs"
+```
+
+This launcher starts the GUI outside Claude Code's short-lived command process.
+
 ### Pet Does Not React To Permission Prompts
 
 Check the state file:
@@ -426,6 +444,13 @@ Get-Content "$env:USERPROFILE\.claude\pet-companion\runtime\state.json"
 ```
 
 For permission prompts, it should contain `waiting` and `notification:permission_prompt`.
+
+For tool approval prompts, it should contain `waiting`, `approval-request`, and an `approvalId`. The installed `PreToolUse` hook should be synchronous:
+
+```text
+async: false
+timeout: 130
+```
 
 ### A Terminal Window Appears
 

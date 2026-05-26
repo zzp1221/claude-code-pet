@@ -73,7 +73,7 @@ select {
   box-shadow: 0 14px 32px rgba(0, 0, 0, 0.3);
   backdrop-filter: blur(16px);
   color: rgba(255, 255, 255, 0.94);
-  pointer-events: none;
+  pointer-events: auto;
   animation: bubble-pop 220ms ease-out;
 }
 
@@ -90,6 +90,24 @@ select {
   background: inherit;
 }
 
+.bubble-head {
+  display: flex;
+  gap: 8px;
+  align-items: start;
+  justify-content: space-between;
+}
+
+.bubble-head button {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.82);
+  cursor: pointer;
+}
+
 .status-bubble strong {
   font-size: 14px;
   line-height: 1.25;
@@ -101,8 +119,9 @@ select {
   color: rgba(255, 255, 255, 0.76);
   font-size: 12px;
   line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
 }
 
 .status-bubble small {
@@ -122,6 +141,27 @@ select {
 .status-bubble.review {
   border-color: rgba(111, 230, 177, 0.45);
   background: rgba(18, 40, 31, 0.86);
+}
+
+.approval-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.approval-actions button {
+  min-height: 30px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.09);
+  color: rgba(255, 255, 255, 0.9);
+  cursor: pointer;
+}
+
+.approval-actions .primary {
+  border-color: rgba(111, 230, 177, 0.42);
+  background: rgba(111, 230, 177, 0.18);
 }
 
 .caption {
@@ -183,6 +223,10 @@ select {
   right: 12px;
   z-index: 5;
   width: min(280px, calc(100vw - 24px));
+  max-height: calc(100vh - 62px);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
   padding: 12px;
   border: 1px solid rgba(255, 255, 255, 0.16);
   border-radius: 8px;
@@ -277,6 +321,14 @@ select {
   width: 100%;
   min-height: 34px;
   margin-top: 8px;
+}
+
+.panel-footer {
+  position: sticky;
+  bottom: -12px;
+  margin: 8px -12px -12px;
+  padding: 8px 12px 12px;
+  background: linear-gradient(to bottom, rgba(15, 17, 23, 0.72), rgba(15, 17, 23, 0.96) 35%);
 }
 
 .danger {

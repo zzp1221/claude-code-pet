@@ -107,6 +107,8 @@ Claude Code 会使用安装好的 `claude-pet-companion` skill 来创建、校�
 
 当 Claude Code 弹出权限确认时，桌宠会出现提示气泡，提醒你回到终端选择 Yes 或 No。
 
+对于 `PreToolUse` 权限检查，气泡还会显示工具名，以及命令、文件或输入内容的精简摘要。气泡里的 **允许** 和 **拒绝** 按钮会通过 `hookSpecificOutput.permissionDecision` 写回 Claude Code hook 响应，所以终端里的权限请求可以直接从桌宠按钮继续。普通通知类消息可以在气泡里关闭，也会按时自动过期。
+
 悬浮窗还加入了一层更接近 Codex 跟宠的动作编排：
 
 - `/pet` 唤出时短暂播放 `waving`。
@@ -417,6 +419,22 @@ Spritesheet 要求：
 
 然后重启 Claude Code，或开启一个新会话。
 
+### `/pet` 显示已启动但没有桌宠
+
+重新运行安装命令，让 `/pet` 命令改用启动器脚本：
+
+```powershell
+.\claude-pet-companion.exe --install
+```
+
+命令内容里应包含：
+
+```text
+!wscript.exe "%USERPROFILE%\.claude\pet-companion\runtime\launch-pet.vbs"
+```
+
+这个启动器会把 GUI 从 Claude Code 的短生命周期命令进程中分离出来。
+
 ### 桌宠没有响应权限提示
 
 检查状态文件：
@@ -426,6 +444,13 @@ Get-Content "$env:USERPROFILE\.claude\pet-companion\runtime\state.json"
 ```
 
 权限提示时应包含 `waiting` 和 `notification:permission_prompt`。
+
+工具审批提示时应包含 `waiting`、`approval-request` 和 `approvalId`。安装后的 `PreToolUse` hook 应该是同步等待：
+
+```text
+async: false
+timeout: 130
+```
 
 ### 出现黑色终端窗口
 

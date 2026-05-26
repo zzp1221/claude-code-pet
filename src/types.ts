@@ -14,11 +14,16 @@ export type RuntimeState = {
   event: string;
   updatedAt: string;
   ttlMs: number;
+  approvalId?: string | null;
+  approvalKind?: string | null;
   error?: string | null;
+  detail?: string | null;
   message?: string | null;
   notificationType?: string | null;
   petId?: string | null;
   reason?: string | null;
+  requiresDecision?: boolean | null;
+  toolInputSummary?: string | null;
   toolName?: string | null;
 };
 

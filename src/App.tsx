@@ -19,7 +19,10 @@ const DEFAULT_CONFIG: CompanionConfig = {
 const COPY = {
   "zh-CN": {
     actions: {
+      allow: "允许",
       closeMenu: "关闭菜单",
+      closeNotice: "关闭提示",
+      deny: "拒绝",
       disableTop: "取消置顶",
       enableTop: "保持置顶",
       importPet: "导入宠物文件夹",
@@ -46,6 +49,7 @@ const COPY = {
       petFallback: "Claude 桌宠"
     },
     notices: {
+      approvalDetail: "可在这里确认，也可回到终端处理",
       failedBody: "Claude Code 遇到错误",
       failedTitle: "操作失败",
       permissionBody: "回到终端选择 Yes / No",
@@ -70,7 +74,10 @@ const COPY = {
   },
   en: {
     actions: {
+      allow: "Allow",
       closeMenu: "Close menu",
+      closeNotice: "Close notice",
+      deny: "Deny",
       disableTop: "Disable Always On Top",
       enableTop: "Enable Always On Top",
       importPet: "Import Pet Folder",
@@ -97,6 +104,7 @@ const COPY = {
       petFallback: "Claude Pet"
     },
     notices: {
+      approvalDetail: "Confirm here, or return to the terminal",
       failedBody: "Claude Code hit an error",
       failedTitle: "Action failed",
       permissionBody: "Return to the terminal and choose Yes / No",
@@ -120,7 +128,7 @@ const COPY = {
     }
   }
 } satisfies Record<Language, {
-  actions: Record<"closeMenu" | "disableTop" | "enableTop" | "importPet" | "quit" | "scanCodex", string>;
+  actions: Record<"allow" | "closeMenu" | "closeNotice" | "deny" | "disableTop" | "enableTop" | "importPet" | "quit" | "scanCodex", string>;
   aria: Record<"dragPet" | "menu", string>;
   fields: Record<"language" | "pet", string>;
   languageNames: Record<Language, string>;
@@ -132,6 +140,7 @@ const COPY = {
     petFallback: string;
   };
   notices: {
+    approvalDetail: string;
     failedBody: string;
     failedTitle: string;
     permissionBody: string;
@@ -165,7 +174,7 @@ function noticeFor(runtime: RuntimeState, state: PetState, copy: typeof COPY[Lan
     return {
       tone: "waiting",
       title: isPermission ? copy.notices.permissionTitle : copy.notices.waitingTitle,
-      body: shortText(runtime.message) || (isPermission ? copy.notices.permissionBody : copy.notices.waitingBody),
+      body: shortText(runtime.message || runtime.toolInputSummary || runtime.detail, 180) || (isPermission ? copy.notices.permissionBody : copy.notices.waitingBody),
       detail: runtime.toolName ? copy.notices.permissionDetail(runtime.toolName) : ""
     };
   }
@@ -210,6 +219,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [dismissedNoticeAt, setDismissedNoticeAt] = useState("");
   const [sequenceState, setSequenceState] = useState<PetState | null>(null);
   const [idleFlourish, setIdleFlourish] = useState<PetState | null>(null);
   const [dragState, setDragState] = useState<PetState | null>(null);
@@ -224,6 +234,7 @@ export default function App() {
   const language = config.language === "en" ? "en" : "zh-CN";
   const copy = COPY[language];
   const notice = useMemo(() => noticeFor(runtime, activeState, copy), [activeState, copy, runtime]);
+  const visibleNotice = notice && dismissedNoticeAt !== runtime.updatedAt ? notice : null;
 
   const refreshPets = useCallback(async (activeId?: string) => {
     const found = await invoke<PetInfo[]>("list_pets");
@@ -420,6 +431,23 @@ export default function App() {
     await invoke("close_app");
   }
 
+  async function decideApproval(decision: "allow" | "deny") {
+    if (!runtime.approvalId) return;
+    await invoke("write_approval_decision", {
+      approvalId: runtime.approvalId,
+      decision
+    });
+    setRuntime((previous) => ({
+      ...previous,
+      approvalId: null,
+      event: decision === "allow" ? "approval-allowed" : "approval-denied",
+      requiresDecision: false,
+      state: decision === "allow" ? "running" : "idle",
+      updatedAt: `${Date.now()}`
+    }));
+    setDismissedNoticeAt(runtime.updatedAt);
+  }
+
   async function startDrag(event: MouseEvent<HTMLButtonElement>) {
     if (menuOpen) return;
     if (dragTimer.current !== null) window.clearTimeout(dragTimer.current);
@@ -442,11 +470,21 @@ export default function App() {
         <PetCanvas imageUrl={imageUrl} state={displayState} scale={config.window.scale} />
       </section>
 
-      {notice && (
-        <div className={`status-bubble ${notice.tone}`} role="status" aria-live="polite">
-          <strong>{notice.title}</strong>
-          <span>{notice.body}</span>
-          {notice.detail && <small>{notice.detail}</small>}
+      {visibleNotice && (
+        <div className={`status-bubble ${visibleNotice.tone}`} role="status" aria-live="polite">
+          <div className="bubble-head">
+            <strong>{visibleNotice.title}</strong>
+            <button onClick={() => setDismissedNoticeAt(runtime.updatedAt)} aria-label={copy.actions.closeNotice}>x</button>
+          </div>
+          <span>{visibleNotice.body}</span>
+          {runtime.requiresDecision && <small>{copy.notices.approvalDetail}</small>}
+          {visibleNotice.detail && <small>{visibleNotice.detail}</small>}
+          {runtime.requiresDecision && runtime.approvalId && (
+            <div className="approval-actions">
+              <button onClick={() => void decideApproval("deny")}>{copy.actions.deny}</button>
+              <button className="primary" onClick={() => void decideApproval("allow")}>{copy.actions.allow}</button>
+            </div>
+          )}
         </div>
       )}
 
@@ -493,10 +531,12 @@ export default function App() {
           <button className="wide" onClick={() => void toggleAlwaysOnTop()}>
             {config.window.alwaysOnTop ? copy.actions.disableTop : copy.actions.enableTop}
           </button>
-          <button className="wide danger" onClick={() => void closeApp()}>{copy.actions.quit}</button>
 
           {syncMessage && <p className="success">{syncMessage}</p>}
           {error && <p className="error">{error}</p>}
+          <div className="panel-footer">
+            <button className="wide danger" onClick={() => void closeApp()}>{copy.actions.quit}</button>
+          </div>
         </aside>
       )}
     </main>
