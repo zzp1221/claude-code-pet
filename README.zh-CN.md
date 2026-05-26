@@ -1,5 +1,7 @@
 # Claude Pet Companion
 
+**下载 / Download:** [最新发布 / Latest Release](https://github.com/zzp1221/claude-code-pet/releases/latest) - 可在这里下载 Windows 安装包、MSI 和便携版 `.exe`。/ Windows installer, MSI, and portable `.exe` are available there.
+
 简体中文 | [English](./README.md)
 
 Claude Pet Companion 是一个独立的 Claude Code 桌面宠物伴侣。它不会替换 Claude Code 内置功能，也不会占用终端状态行，而是通过 Claude Code 用户级 hooks 写入运行状态，再由 Tauri 透明悬浮窗读取状态并播放对应的宠物 spritesheet 动画。

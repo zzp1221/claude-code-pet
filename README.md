@@ -1,6 +1,10 @@
 # Claude Pet Companion
 
+**Download / 下载:** [Latest Release / 最新发布](https://github.com/zzp1221/claude-code-pet/releases/latest) - Windows installer, MSI, and portable `.exe` are available there. / 可在这里下载 Windows 安装包、MSI 和便携版 `.exe`。
+
 [简体中文](./README.zh-CN.md) | English
+
+Claude Pet Companion 是一个独立的 Claude Code 桌面宠物伴侣。它不会替换 Claude Code 内置功能，也不会占用终端状态行；Claude Code 用户级 hooks 会写入运行状态，透明 Tauri 悬浮窗读取状态并播放对应的 spritesheet 动画。
 
 Claude Pet Companion is a standalone desktop pet overlay for Claude Code. It does not replace Claude Code's built-in features and does not use the terminal status line. Instead, Claude Code user-level hooks write runtime state, and a transparent Tauri window reads that state to play matching spritesheet animations.
 
