@@ -29,8 +29,11 @@ export type WindowConfig = {
   alwaysOnTop: boolean;
 };
 
+export type Language = "zh-CN" | "en";
+
 export type CompanionConfig = {
   activePetId: string;
+  language?: Language;
   petSources: string[];
   window: WindowConfig;
 };

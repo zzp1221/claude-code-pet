@@ -50,6 +50,8 @@ struct WindowConfig {
 #[serde(rename_all = "camelCase")]
 struct CompanionConfig {
     active_pet_id: String,
+    #[serde(default = "default_language")]
+    language: String,
     pet_sources: Vec<String>,
     window: WindowConfig,
 }
@@ -90,6 +92,14 @@ fn companion_dir() -> Result<PathBuf, String> {
     Ok(home_dir()?.join(COMPANION_DIR))
 }
 
+fn companion_pets_dir() -> Result<PathBuf, String> {
+    Ok(companion_dir()?.join("pets"))
+}
+
+fn codex_pets_dir() -> Result<PathBuf, String> {
+    Ok(home_dir()?.join(".codex/pets"))
+}
+
 fn config_path() -> Result<PathBuf, String> {
     Ok(companion_dir()?.join("config.json"))
 }
@@ -124,11 +134,16 @@ fn backup_path(label: &str) -> Result<PathBuf, String> {
         .join(format!("settings.pet-companion.{label}.{stamp}.json")))
 }
 
+fn default_language() -> String {
+    "zh-CN".to_string()
+}
+
 fn default_config() -> Result<CompanionConfig, String> {
     let home = home_dir()?;
     let companion = companion_dir()?;
     Ok(CompanionConfig {
         active_pet_id: "hiyue".to_string(),
+        language: default_language(),
         pet_sources: vec![
             home.join(".codex/pets").to_string_lossy().to_string(),
             companion.join("pets").to_string_lossy().to_string(),
@@ -150,7 +165,12 @@ fn read_config_inner() -> Result<CompanionConfig, String> {
         return Ok(config);
     }
     let text = fs::read_to_string(&path).map_err(|error| error.to_string())?;
-    serde_json::from_str(&text).map_err(|error| error.to_string())
+    let raw: Value = serde_json::from_str(&text).map_err(|error| error.to_string())?;
+    let config: CompanionConfig = serde_json::from_value(raw.clone()).map_err(|error| error.to_string())?;
+    if raw.get("language").is_none() {
+        write_config_inner(&config)?;
+    }
+    Ok(config)
 }
 
 fn write_config_inner(config: &CompanionConfig) -> Result<(), String> {
@@ -351,7 +371,7 @@ fn install_pet_command_inner() -> Result<(), String> {
     let command = format!(
         r#"---
 description: Launch/focus Claude Pet Companion, or create/import a recognizable desktop pet when arguments are provided.
-argument-hint: [pet description | import <folder> | switch <pet-id>]
+argument-hint: [pet description | import <folder> | switch <pet-id> | sync]
 allowed-tools: Bash({} *), Read, Write, Edit, MultiEdit, Glob, Grep, LS
 ---
 
@@ -366,6 +386,7 @@ If `Arguments` is not empty, treat it as a Claude Pet Companion request. Follow 
 Common intents:
 - `import <folder>`: validate the folder contains `pet.json` and `spritesheet.webp`, then run `{exe} --import-pet "<folder>"`.
 - `switch <pet-id>`: run `{exe} --set-pet <pet-id> --launch --state waving --event pet-switched --ttl-ms 3000`.
+- `sync` or `scan codex`: run `{exe} --sync-codex-pets` so pets installed in Codex become selectable here.
 - Any mascot or character description: create a Codex-compatible pet package that this companion can recognize, then import it with `{exe} --import-pet "<package-folder>"`.
 "#,
         path_text(&exe),
@@ -405,6 +426,7 @@ Useful commands:
 {exe} --launch --state waving --event slash-command --ttl-ms 3000
 {exe} --import-pet "<absolute pet package folder>"
 {exe} --set-pet <pet-id> --launch --state waving --event pet-switched --ttl-ms 3000
+{exe} --sync-codex-pets
 ```
 
 ## Recognizable Pet Package Contract
@@ -468,6 +490,16 @@ Run:
 ```
 
 If the pet id is unknown, inspect `~/.codex/pets` and `~/.claude/pet-companion/pets`.
+
+## Workflow For `/pet sync` Or `/pet scan codex`
+
+Run:
+
+```powershell
+{exe} --sync-codex-pets
+```
+
+Then tell the user that Codex-installed pets have been scanned and can be selected from the companion menu.
 "#,
         exe = command_arg(&exe)
     );
@@ -656,23 +688,53 @@ fn run_hook(args: &[String]) -> Result<(), String> {
     write_state_inner(&state, &event, ttl_ms, extra)
 }
 
-fn import_pet_package_inner(source: &Path, activate: bool) -> Result<PetInfo, String> {
+fn same_directory(left: &Path, right: &Path) -> bool {
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
+fn file_modified(path: &Path) -> Option<SystemTime> {
+    fs::metadata(path).and_then(|metadata| metadata.modified()).ok()
+}
+
+fn target_needs_pet_copy(source: &Path, source_pet: &PetInfo, target: &Path) -> bool {
+    if !target.is_dir() || read_manifest(target).is_err() {
+        return true;
+    }
+    let source_manifest = source.join("pet.json");
+    let target_manifest = target.join("pet.json");
+    let target_spritesheet = target.join("spritesheet.webp");
+    let source_manifest_time = file_modified(&source_manifest);
+    let source_sheet_time = file_modified(Path::new(&source_pet.spritesheet_path));
+    let target_manifest_time = file_modified(&target_manifest);
+    let target_sheet_time = file_modified(&target_spritesheet);
+
+    source_manifest_time > target_manifest_time || source_sheet_time > target_sheet_time
+}
+
+fn import_pet_package_inner(source: &Path, activate: bool, announce: bool) -> Result<PetInfo, String> {
     let pet = read_manifest(source)?;
-    let companion = companion_dir()?;
-    let target = companion.join("pets").join(&pet.id);
-    if target.exists() {
+    let target = companion_pets_dir()?.join(&pet.id);
+    let source_is_target = target.is_dir() && same_directory(source, &target);
+
+    if target.exists() && !source_is_target {
         fs::remove_dir_all(&target).map_err(|error| error.to_string())?;
     }
-    fs::create_dir_all(&target).map_err(|error| error.to_string())?;
-    fs::copy(&pet.spritesheet_path, target.join("spritesheet.webp"))
-        .map_err(|error| error.to_string())?;
-    let normalized_manifest = json!({
-        "id": pet.id,
-        "displayName": pet.display_name,
-        "description": pet.description,
-        "spritesheetPath": "spritesheet.webp"
-    });
-    write_json_file(&target.join("pet.json"), &normalized_manifest)?;
+
+    if !source_is_target {
+        fs::create_dir_all(&target).map_err(|error| error.to_string())?;
+        fs::copy(&pet.spritesheet_path, target.join("spritesheet.webp"))
+            .map_err(|error| error.to_string())?;
+        let normalized_manifest = json!({
+            "id": pet.id,
+            "displayName": pet.display_name,
+            "description": pet.description,
+            "spritesheetPath": "spritesheet.webp"
+        });
+        write_json_file(&target.join("pet.json"), &normalized_manifest)?;
+    }
 
     let imported = read_manifest(&target)?;
     if activate {
@@ -680,16 +742,48 @@ fn import_pet_package_inner(source: &Path, activate: bool) -> Result<PetInfo, St
         config.active_pet_id = imported.id.clone();
         write_config_inner(&config)?;
     }
-    write_state_inner(
-        "review",
-        "pet-imported",
-        3000,
-        Some(json!({
-            "petId": imported.id,
-            "displayName": imported.display_name
-        })),
-    )?;
+    if announce {
+        write_state_inner(
+            "review",
+            "pet-imported",
+            3000,
+            Some(json!({
+                "petId": imported.id,
+                "displayName": imported.display_name
+            })),
+        )?;
+    }
     Ok(imported)
+}
+
+fn sync_codex_pets_inner() -> Result<Vec<PetInfo>, String> {
+    let source_root = codex_pets_dir()?;
+    let Ok(entries) = fs::read_dir(source_root) else {
+        return Ok(Vec::new());
+    };
+
+    let mut synced = Vec::new();
+    for entry in entries.flatten() {
+        let source = entry.path();
+        if !source.is_dir() {
+            continue;
+        }
+
+        let Ok(pet) = read_manifest(&source) else {
+            continue;
+        };
+
+        let target = companion_pets_dir()?.join(&pet.id);
+        if !same_directory(&source, &target) && target_needs_pet_copy(&source, &pet, &target) {
+            let imported = import_pet_package_inner(&source, false, false)?;
+            synced.push(imported);
+            continue;
+        }
+
+        synced.push(pet);
+    }
+    synced.sort_by(|left, right| left.display_name.cmp(&right.display_name));
+    Ok(synced)
 }
 
 fn set_active_pet_inner(id: &str) -> Result<(), String> {
@@ -718,6 +812,7 @@ fn launch_existing_or_new(args: &[String]) -> Result<(), String> {
 
 fn run_cli(args: &[String]) -> Result<bool, String> {
     if args.iter().any(|arg| arg == "--install") {
+        let _ = read_config_inner()?;
         install_hooks_inner()?;
         return Ok(true);
     }
@@ -734,7 +829,17 @@ fn run_cli(args: &[String]) -> Result<bool, String> {
         return Ok(true);
     }
     if let Some(source) = arg_value(args, "--import-pet") {
-        import_pet_package_inner(&PathBuf::from(source), true)?;
+        import_pet_package_inner(&PathBuf::from(source), true, true)?;
+        return Ok(true);
+    }
+    if args.iter().any(|arg| arg == "--sync-codex-pets") {
+        let synced = sync_codex_pets_inner()?;
+        write_state_inner(
+            "review",
+            "codex-pets-synced",
+            3000,
+            Some(json!({ "count": synced.len() })),
+        )?;
         return Ok(true);
     }
     if let Some(id) = arg_value(args, "--set-pet") {
@@ -804,7 +909,12 @@ fn load_image_data_url(path: String) -> Result<String, String> {
 
 #[tauri::command]
 fn import_pet(source_dir: String) -> Result<PetInfo, String> {
-    import_pet_package_inner(&PathBuf::from(source_dir), true)
+    import_pet_package_inner(&PathBuf::from(source_dir), true, true)
+}
+
+#[tauri::command]
+fn sync_codex_pets() -> Result<Vec<PetInfo>, String> {
+    sync_codex_pets_inner()
 }
 
 #[tauri::command]
@@ -865,7 +975,8 @@ pub fn run() {
             load_image_data_url,
             read_state,
             save_config,
-            start_window_drag
+            start_window_drag,
+            sync_codex_pets
         ])
         .run(tauri::generate_context!())
         .expect("error while running Claude Pet Companion");

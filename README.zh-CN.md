@@ -7,13 +7,13 @@ Claude Pet Companion 是一个独立的 Claude Code 桌面宠物伴侣。它不�
 ## 功能亮点
 
 - 透明、无边框、置顶的桌面宠物窗口。
-- 右键菜单支持切换宠物、导入宠物、缩放、置顶开关和退出。
+- 右键菜单支持中英切换、切换宠物、扫描 Codex 宠物、导入宠物、缩放、置顶开关和退出。
 - 一个 `.exe` 可完成 hooks 安装、`/pet` 命令安装和桌宠启动。
 - 在 Claude Code 中输入 `/pet` 可唤出或聚焦桌宠。
 - 输入 `/pet <描述>` 可让 Claude Code 进入可识别桌宠包的创建流程。
 - 用户级 hooks 自动感知运行中、等待权限、失败、完成回顾和空闲状态。
 - Claude Code 等待权限确认时，桌宠会显示明显的提示气泡。
-- 兼容 Codex 风格宠物包。
+- 兼容 Codex 风格宠物包，并会自动同步安装在 `~/.codex/pets` 下的跟宠。
 - 安装 hooks 前会备份 `~/.claude/settings.json`。
 - 卸载时只移除本项目自己的 hooks 和 `/pet` 命令，不动其它 Claude Code 配置。
 
@@ -74,15 +74,26 @@ Claude Pet Companion_0.1.0_x64-setup.exe
 /pet 做一只拿金箍棒的月亮兔桌宠
 /pet import C:\Users\ASUS\Downloads\my-pet
 /pet switch hiyue
+/pet sync
 ```
 
-Claude Code 会使用安装好的 `claude-pet-companion` skill 来创建、校验、导入或切换可被桌宠程序识别的宠物包。
+Claude Code 会使用安装好的 `claude-pet-companion` skill 来创建、校验、导入、切换或同步可被桌宠程序识别的宠物包。
 
 ### 桌面控制
 
 - 按住透明区域可以拖动桌宠窗口。
 - 右键桌宠，或点击右上角小点按钮，可以打开控制面板。
-- 控制面板支持切换宠物、导入宠物文件夹、缩放、切换置顶和退出。
+- 控制面板支持切换中文/英文界面、切换宠物、扫描 Codex 宠物、导入宠物文件夹、缩放、切换置顶和退出。
+
+### 界面语言
+
+打开桌宠菜单，把 **界面语言** 切换为 **中文** 或 **English** 即可。选择会保存到：
+
+```text
+%USERPROFILE%\.claude\pet-companion\config.json
+```
+
+提示气泡、菜单文案、状态字幕和导入文件夹弹窗标题都会跟随这个设置。
 
 ### 桌宠状态
 
@@ -117,6 +128,28 @@ spritesheet.webp
 
 ```text
 %USERPROFILE%\.claude\pet-companion\pets
+```
+
+### 使用 Codex 已安装的跟宠
+
+可以。这个桌宠伴侣会识别安装在下面目录的 Codex 兼容跟宠：
+
+```text
+%USERPROFILE%\.codex\pets
+```
+
+启动时，程序会扫描该目录，并把有效宠物包复制到：
+
+```text
+%USERPROFILE%\.claude\pet-companion\pets
+```
+
+你也可以打开桌宠菜单，点击 **扫描 Codex 宠物**。有效的 Codex 跟宠会出现在同一个宠物选择框里，不需要重启 Claude Code。
+
+在终端或已安装的 `/pet` skill 工作流中，也可以用同一个 exe 命令触发同步：
+
+```powershell
+.\claude-pet-companion.exe --sync-codex-pets
 ```
 
 ### 卸载 hooks
@@ -190,6 +223,7 @@ src-tauri/target/release/bundle/msi/
 .\claude-pet-companion.exe --hook --state waiting --event manual-hook
 .\claude-pet-companion.exe --import-pet "C:\path\to\pet-package"
 .\claude-pet-companion.exe --set-pet hiyue
+.\claude-pet-companion.exe --sync-codex-pets
 ```
 
 Node 版 hook handler 仍保留，方便开发时调试：
@@ -254,6 +288,27 @@ launch-pet.vbs               本地 release exe 静默启动脚本
 ```
 
 示例见 [config.example.json](./config.example.json)。
+
+配置字段：
+
+| 字段 | 含义 |
+| --- | --- |
+| `activePetId` | 当前选中的宠物 id。 |
+| `language` | UI 语言，目前支持 `zh-CN` 和 `en`。 |
+| `petSources` | 扫描 `pet.json` 宠物包的目录列表。 |
+| `window.scale` | 桌宠缩放，UI 中限制在 50% 到 250%。 |
+| `window.alwaysOnTop` | 悬浮窗是否保持置顶。 |
+
+### Codex 跟宠同步规则
+
+`--sync-codex-pets` 和 **扫描 Codex 宠物** 按钮会：
+
+- 扫描 `%USERPROFILE%\.codex\pets` 下一级目录。
+- 接受包含可读取 `pet.json` 且 spritesheet 文件存在的文件夹。
+- 把有效宠物包复制到 `%USERPROFILE%\.claude\pet-companion\pets\<id>`。
+- 规范化复制后的 manifest，让 `spritesheetPath` 指向 `spritesheet.webp`。
+- 如果通过 CLI 触发，会通过 `runtime/state.json` 通知正在运行的悬浮窗刷新。
+- 不修改 Codex 原始宠物包。
 
 ### 宠物包格式
 

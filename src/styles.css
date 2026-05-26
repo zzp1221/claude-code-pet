@@ -226,6 +226,13 @@ select {
   cursor: pointer;
 }
 
+.panel-head button:disabled,
+.controls button:disabled,
+.wide:disabled {
+  cursor: default;
+  opacity: 0.52;
+}
+
 .panel-head button {
   width: 28px;
   height: 28px;
@@ -280,6 +287,13 @@ select {
 .error {
   margin: 10px 0 0;
   color: #ffb6b6;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.success {
+  margin: 10px 0 0;
+  color: #b7f7d1;
   font-size: 12px;
   line-height: 1.4;
 }

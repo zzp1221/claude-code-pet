@@ -7,13 +7,13 @@ Claude Pet Companion is a standalone desktop pet overlay for Claude Code. It doe
 ## Highlights
 
 - Transparent, frameless, always-on-top desktop pet window.
-- Right-click menu for pet switching, pet import, scale, always-on-top, and quit.
+- Right-click menu for bilingual UI, pet switching, Codex pet scan, pet import, scale, always-on-top, and quit.
 - One `.exe` can install hooks, create the `/pet` slash command, and launch the pet.
 - `/pet` in Claude Code launches or focuses the companion.
 - `/pet <description>` starts a Claude Code pet-creation workflow for a recognizable companion pet package.
 - User-level hooks track running, waiting for permission, failed, review, and idle states.
 - Visible prompt bubble when Claude Code is waiting for your permission.
-- Compatible with Codex-style pet packages.
+- Compatible with Codex-style pet packages and automatically syncs pets installed under `~/.codex/pets`.
 - Hook installer backs up `~/.claude/settings.json` before writing changes.
 - Uninstaller only removes handlers owned by this project.
 
@@ -74,15 +74,26 @@ With arguments, `/pet` becomes a pet workflow command:
 /pet make a tiny moon rabbit with a brass staff
 /pet import C:\Users\ASUS\Downloads\my-pet
 /pet switch hiyue
+/pet sync
 ```
 
-Claude Code will use the installed `claude-pet-companion` skill to create, validate, import, or switch a recognizable desktop pet package.
+Claude Code will use the installed `claude-pet-companion` skill to create, validate, import, switch, or sync recognizable desktop pet packages.
 
 ### Desktop Controls
 
 - Drag the pet window by holding the transparent area.
 - Right-click the pet, or click the top-right dot button, to open the control panel.
-- Use the panel to switch pets, import a pet folder, scale the pet, toggle always-on-top, or quit.
+- Use the panel to switch Chinese/English UI, switch pets, scan Codex pets, import a pet folder, scale the pet, toggle always-on-top, or quit.
+
+### Language
+
+Open the pet menu and change **Language** to either **中文** or **English**. The choice is saved in:
+
+```text
+%USERPROFILE%\.claude\pet-companion\config.json
+```
+
+The prompt bubble, menu labels, status captions, and import dialog title follow the selected language.
 
 ### Pet Behavior
 
@@ -117,6 +128,28 @@ Open the pet menu and choose **Import Pet Folder**. Imported pets are copied to:
 
 ```text
 %USERPROFILE%\.claude\pet-companion\pets
+```
+
+### Use Pets Installed By Codex
+
+Yes. The companion recognizes Codex-compatible pets installed under:
+
+```text
+%USERPROFILE%\.codex\pets
+```
+
+On startup, it scans that directory and copies valid packages into:
+
+```text
+%USERPROFILE%\.claude\pet-companion\pets
+```
+
+You can also open the pet menu and choose **Scan Codex Pets**. Valid Codex pets appear in the same pet selector without restarting Claude Code.
+
+From a terminal or from the installed `/pet` skill workflow, the same operation is available as:
+
+```powershell
+.\claude-pet-companion.exe --sync-codex-pets
 ```
 
 ### Uninstall Hooks
@@ -190,6 +223,7 @@ The release executable includes the installer, hook handler, launcher, and state
 .\claude-pet-companion.exe --hook --state waiting --event manual-hook
 .\claude-pet-companion.exe --import-pet "C:\path\to\pet-package"
 .\claude-pet-companion.exe --set-pet hiyue
+.\claude-pet-companion.exe --sync-codex-pets
 ```
 
 The Node hook handler remains available for local debugging:
@@ -254,6 +288,27 @@ Default pet sources:
 ```
 
 See [config.example.json](./config.example.json).
+
+Config fields:
+
+| Field | Meaning |
+| --- | --- |
+| `activePetId` | Currently selected pet id. |
+| `language` | UI language, currently `zh-CN` or `en`. |
+| `petSources` | Directories scanned for `pet.json` packages. |
+| `window.scale` | Pet scale, clamped by the UI between 50% and 250%. |
+| `window.alwaysOnTop` | Whether the overlay stays above other windows. |
+
+### Codex Pet Sync Rules
+
+`--sync-codex-pets` and the **Scan Codex Pets** button:
+
+- Scan one level under `%USERPROFILE%\.codex\pets`.
+- Accept folders that contain a readable `pet.json` and the referenced spritesheet.
+- Copy each valid package to `%USERPROFILE%\.claude\pet-companion\pets\<id>`.
+- Normalize the copied manifest so `spritesheetPath` points to `spritesheet.webp`.
+- Refresh the running overlay through `runtime/state.json` when invoked from the CLI.
+- Never modify Codex's original pet package.
 
 ### Pet Package Format
 

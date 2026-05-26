@@ -4,16 +4,146 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent } from "react";
 import { normalizeState } from "./atlas";
 import { PetCanvas } from "./PetCanvas";
-import type { CompanionConfig, PetInfo, PetState, RuntimeState } from "./types";
+import type { CompanionConfig, Language, PetInfo, PetState, RuntimeState } from "./types";
 
 const DEFAULT_CONFIG: CompanionConfig = {
   activePetId: "hiyue",
+  language: "zh-CN",
   petSources: [],
   window: {
     scale: 1,
     alwaysOnTop: true
   }
 };
+
+const COPY = {
+  "zh-CN": {
+    actions: {
+      closeMenu: "关闭菜单",
+      disableTop: "取消置顶",
+      enableTop: "保持置顶",
+      importPet: "导入宠物文件夹",
+      quit: "退出",
+      scanCodex: "扫描 Codex 宠物"
+    },
+    aria: {
+      dragPet: "拖动桌宠",
+      menu: "宠物菜单"
+    },
+    fields: {
+      language: "界面语言",
+      pet: "宠物"
+    },
+    languageNames: {
+      "zh-CN": "中文",
+      en: "English"
+    },
+    messages: {
+      codexSyncFailed: "扫描 Codex 宠物失败",
+      codexSynced: (count: number) => `已同步 ${count} 个 Codex 宠物`,
+      importTitle: "选择包含 pet.json 的宠物文件夹",
+      noPet: "暂无宠物",
+      petFallback: "Claude 桌宠"
+    },
+    notices: {
+      failedBody: "Claude Code 遇到错误",
+      failedTitle: "操作失败",
+      permissionBody: "回到终端选择 Yes / No",
+      permissionDetail: (toolName: string) => `来自 ${toolName}`,
+      permissionTitle: "需要你的确认",
+      reviewBody: "回到 Claude Code 查看结果",
+      reviewTitle: "回复已完成",
+      waitingBody: "回到 Claude Code 继续",
+      waitingTitle: "Claude Code 正在等待"
+    },
+    states: {
+      failed: "失败",
+      idle: "空闲",
+      jumping: "跳跃",
+      review: "完成",
+      running: "运行中",
+      "running-left": "向左跑",
+      "running-right": "向右跑",
+      waiting: "等待",
+      waving: "挥手"
+    }
+  },
+  en: {
+    actions: {
+      closeMenu: "Close menu",
+      disableTop: "Disable Always On Top",
+      enableTop: "Enable Always On Top",
+      importPet: "Import Pet Folder",
+      quit: "Quit",
+      scanCodex: "Scan Codex Pets"
+    },
+    aria: {
+      dragPet: "Drag pet",
+      menu: "Pet menu"
+    },
+    fields: {
+      language: "Language",
+      pet: "Pet"
+    },
+    languageNames: {
+      "zh-CN": "中文",
+      en: "English"
+    },
+    messages: {
+      codexSyncFailed: "Failed to scan Codex pets",
+      codexSynced: (count: number) => `Synced ${count} Codex pet${count === 1 ? "" : "s"}`,
+      importTitle: "Select a pet folder containing pet.json",
+      noPet: "No pet",
+      petFallback: "Claude Pet"
+    },
+    notices: {
+      failedBody: "Claude Code hit an error",
+      failedTitle: "Action failed",
+      permissionBody: "Return to the terminal and choose Yes / No",
+      permissionDetail: (toolName: string) => `From ${toolName}`,
+      permissionTitle: "Needs your approval",
+      reviewBody: "Return to Claude Code to review the result",
+      reviewTitle: "Response ready",
+      waitingBody: "Return to Claude Code to continue",
+      waitingTitle: "Claude Code is waiting"
+    },
+    states: {
+      failed: "failed",
+      idle: "idle",
+      jumping: "jumping",
+      review: "review",
+      running: "running",
+      "running-left": "running-left",
+      "running-right": "running-right",
+      waiting: "waiting",
+      waving: "waving"
+    }
+  }
+} satisfies Record<Language, {
+  actions: Record<"closeMenu" | "disableTop" | "enableTop" | "importPet" | "quit" | "scanCodex", string>;
+  aria: Record<"dragPet" | "menu", string>;
+  fields: Record<"language" | "pet", string>;
+  languageNames: Record<Language, string>;
+  messages: {
+    codexSyncFailed: string;
+    codexSynced: (count: number) => string;
+    importTitle: string;
+    noPet: string;
+    petFallback: string;
+  };
+  notices: {
+    failedBody: string;
+    failedTitle: string;
+    permissionBody: string;
+    permissionDetail: (toolName: string) => string;
+    permissionTitle: string;
+    reviewBody: string;
+    reviewTitle: string;
+    waitingBody: string;
+    waitingTitle: string;
+  };
+  states: Record<PetState, string>;
+}>;
 
 function clampScale(value: number) {
   return Math.min(2.5, Math.max(0.5, Number(value.toFixed(2))));
@@ -24,7 +154,7 @@ function shortText(value: string | null | undefined, maxLength = 72) {
   return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
 }
 
-function noticeFor(runtime: RuntimeState, state: PetState) {
+function noticeFor(runtime: RuntimeState, state: PetState, copy: typeof COPY[Language]) {
   if (state === "waiting") {
     const isPermission =
       runtime.event === "permission-request" ||
@@ -34,17 +164,17 @@ function noticeFor(runtime: RuntimeState, state: PetState) {
 
     return {
       tone: "waiting",
-      title: isPermission ? "Needs your approval" : "Claude Code is waiting",
-      body: shortText(runtime.message) || (isPermission ? "Return to the terminal and choose Yes / No" : "Return to Claude Code to continue"),
-      detail: runtime.toolName ? `From ${runtime.toolName}` : ""
+      title: isPermission ? copy.notices.permissionTitle : copy.notices.waitingTitle,
+      body: shortText(runtime.message) || (isPermission ? copy.notices.permissionBody : copy.notices.waitingBody),
+      detail: runtime.toolName ? copy.notices.permissionDetail(runtime.toolName) : ""
     };
   }
 
   if (state === "failed") {
     return {
       tone: "failed",
-      title: "Action failed",
-      body: shortText(runtime.error || runtime.reason) || "Claude Code hit an error",
+      title: copy.notices.failedTitle,
+      body: shortText(runtime.error || runtime.reason) || copy.notices.failedBody,
       detail: ""
     };
   }
@@ -52,8 +182,8 @@ function noticeFor(runtime: RuntimeState, state: PetState) {
   if (state === "review") {
     return {
       tone: "review",
-      title: "Response ready",
-      body: "Return to Claude Code to review the result",
+      title: copy.notices.reviewTitle,
+      body: copy.notices.reviewBody,
       detail: ""
     };
   }
@@ -78,6 +208,8 @@ export default function App() {
   });
   const [menuOpen, setMenuOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [syncMessage, setSyncMessage] = useState<string | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [sequenceState, setSequenceState] = useState<PetState | null>(null);
   const [idleFlourish, setIdleFlourish] = useState<PetState | null>(null);
   const [dragState, setDragState] = useState<PetState | null>(null);
@@ -89,7 +221,9 @@ export default function App() {
 
   const activeState = useMemo<PetState>(() => normalizeState(runtime.state), [runtime.state]);
   const displayState = dragState ?? sequenceState ?? idleFlourish ?? activeState;
-  const notice = useMemo(() => noticeFor(runtime, activeState), [activeState, runtime]);
+  const language = config.language === "en" ? "en" : "zh-CN";
+  const copy = COPY[language];
+  const notice = useMemo(() => noticeFor(runtime, activeState, copy), [activeState, copy, runtime]);
 
   const refreshPets = useCallback(async (activeId?: string) => {
     const found = await invoke<PetInfo[]>("list_pets");
@@ -114,6 +248,7 @@ export default function App() {
         const loaded = await invoke<CompanionConfig>("get_config");
         if (cancelled) return;
         setConfig(loaded);
+        await invoke<PetInfo[]>("sync_codex_pets").catch(() => []);
         await refreshPets(loaded.activePetId);
       } catch (loadError) {
         setError(loadError instanceof Error ? loadError.message : String(loadError));
@@ -143,7 +278,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const shouldRefreshPets = runtime.event === "pet-imported" || runtime.event === "pet-switched";
+    const shouldRefreshPets =
+      runtime.event === "pet-imported" ||
+      runtime.event === "pet-switched" ||
+      runtime.event === "codex-pets-synced";
     if (!runtime.updatedAt || !shouldRefreshPets) return;
 
     let cancelled = false;
@@ -223,7 +361,7 @@ export default function App() {
     const selected = await open({
       directory: true,
       multiple: false,
-      title: "Select a pet folder containing pet.json"
+      title: copy.messages.importTitle
     });
     if (typeof selected !== "string") return;
     try {
@@ -231,9 +369,31 @@ export default function App() {
       await refreshPets(imported.id);
       await saveConfig({ ...config, activePetId: imported.id });
       setError(null);
+      setSyncMessage(null);
     } catch (importError) {
       setError(importError instanceof Error ? importError.message : String(importError));
     }
+  }
+
+  async function syncCodexPets(showResult = true) {
+    setIsSyncing(true);
+    try {
+      const synced = await invoke<PetInfo[]>("sync_codex_pets");
+      await refreshPets(config.activePetId);
+      setError(null);
+      if (showResult) setSyncMessage(copy.messages.codexSynced(synced.length));
+    } catch (syncError) {
+      setError(`${copy.messages.codexSyncFailed}: ${syncError instanceof Error ? syncError.message : String(syncError)}`);
+    } finally {
+      setIsSyncing(false);
+    }
+  }
+
+  async function changeLanguage(nextLanguage: Language) {
+    await saveConfig({
+      ...config,
+      language: nextLanguage
+    });
   }
 
   async function adjustScale(delta: number) {
@@ -273,8 +433,8 @@ export default function App() {
       event.preventDefault();
       setMenuOpen((openNow) => !openNow);
     }}>
-      <button className="drag-layer" aria-label="Drag pet" onMouseDown={(event) => void startDrag(event)} />
-      <button className="menu-dot" aria-label="Pet menu" onClick={() => setMenuOpen((openNow) => !openNow)}>
+      <button className="drag-layer" aria-label={copy.aria.dragPet} onMouseDown={(event) => void startDrag(event)} />
+      <button className="menu-dot" aria-label={copy.aria.menu} onClick={() => setMenuOpen((openNow) => !openNow)}>
         <span />
       </button>
 
@@ -291,22 +451,30 @@ export default function App() {
       )}
 
       <div className="caption">
-        <strong>{activePet?.displayName ?? "Claude Pet"}</strong>
-        <span>{displayState}</span>
+        <strong>{activePet?.displayName ?? copy.messages.petFallback}</strong>
+        <span>{copy.states[displayState]}</span>
       </div>
 
       {menuOpen && (
         <aside className="panel">
           <div className="panel-head">
             <div>
-              <strong>{activePet?.displayName ?? "No pet"}</strong>
+              <strong>{activePet?.displayName ?? copy.messages.noPet}</strong>
               <span>{runtime.event || "Claude Code"}</span>
             </div>
-            <button onClick={() => setMenuOpen(false)} aria-label="Close menu">x</button>
+            <button onClick={() => setMenuOpen(false)} aria-label={copy.actions.closeMenu}>x</button>
           </div>
 
           <label className="field">
-            Pet
+            {copy.fields.language}
+            <select value={language} onChange={(event) => void changeLanguage(event.target.value as Language)}>
+              <option value="zh-CN">{copy.languageNames["zh-CN"]}</option>
+              <option value="en">{copy.languageNames.en}</option>
+            </select>
+          </label>
+
+          <label className="field">
+            {copy.fields.pet}
             <select value={activePet?.id ?? ""} onChange={(event) => void choosePet(event.target.value)}>
               {pets.map((pet) => (
                 <option key={pet.id} value={pet.id}>{pet.displayName}</option>
@@ -320,12 +488,14 @@ export default function App() {
             <button onClick={() => void adjustScale(0.1)}>+</button>
           </div>
 
-          <button className="wide" onClick={() => void importPet()}>Import Pet Folder</button>
+          <button className="wide" onClick={() => void syncCodexPets()} disabled={isSyncing}>{copy.actions.scanCodex}</button>
+          <button className="wide" onClick={() => void importPet()}>{copy.actions.importPet}</button>
           <button className="wide" onClick={() => void toggleAlwaysOnTop()}>
-            {config.window.alwaysOnTop ? "Disable Always On Top" : "Enable Always On Top"}
+            {config.window.alwaysOnTop ? copy.actions.disableTop : copy.actions.enableTop}
           </button>
-          <button className="wide danger" onClick={() => void closeApp()}>Quit</button>
+          <button className="wide danger" onClick={() => void closeApp()}>{copy.actions.quit}</button>
 
+          {syncMessage && <p className="success">{syncMessage}</p>}
           {error && <p className="error">{error}</p>}
         </aside>
       )}

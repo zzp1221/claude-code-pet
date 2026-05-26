@@ -1,5 +1,6 @@
 {
   "activePetId": "hiyue",
+  "language": "zh-CN",
   "petSources": [
     "%USERPROFILE%\\.codex\\pets",
     "%USERPROFILE%\\.claude\\pet-companion\\pets"
