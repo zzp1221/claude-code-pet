@@ -212,6 +212,62 @@ src-tauri/target/release/bundle/nsis/
 src-tauri/target/release/bundle/msi/
 ```
 
+### Publish A GitHub Release
+
+Use a GitHub Release for built binaries. Do not commit generated installers, local config, runtime state, or imported pets to the repository.
+
+Recommended tag format:
+
+```text
+v0.1.0
+```
+
+Release build command:
+
+```powershell
+npm install
+npm run tauri:build
+```
+
+Upload these artifacts to the GitHub Release:
+
+```text
+src-tauri/target/release/bundle/nsis/Claude Pet Companion_0.1.0_x64-setup.exe
+src-tauri/target/release/bundle/msi/Claude Pet Companion_0.1.0_x64_en-US.msi
+```
+
+Optional portable binary:
+
+```text
+src-tauri/target/release/claude-pet-companion.exe
+```
+
+Suggested release notes:
+
+```markdown
+## Claude Pet Companion v0.1.0
+
+### Added
+- Transparent always-on-top desktop pet companion for Claude Code.
+- Claude Code user-level hooks for idle, running, waiting, failed, and review states.
+- `/pet` command integration for launch, import, switch, sync, and pet creation workflows.
+- Chinese/English UI switching.
+- Codex-compatible pet package import and Codex pet sync from `~/.codex/pets`.
+
+### Install
+Download and run `Claude Pet Companion_0.1.0_x64-setup.exe`.
+```
+
+Before publishing, verify:
+
+```powershell
+npm run build
+cd src-tauri
+cargo check
+cd ..
+npm run tauri:build
+```
+
 ### Executable Commands
 
 The release executable includes the installer, hook handler, launcher, and state writer:
