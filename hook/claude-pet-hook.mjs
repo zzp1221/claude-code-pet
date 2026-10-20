@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 const VALID_STATES = new Set([
@@ -81,6 +81,9 @@ async function readStdinJson() {
   let input = "";
   for await (const chunk of process.stdin) {
     input += chunk;
+    if (input.length > STDIN_MAX_BYTES) {
+      return { truncated: true, bytes: input.length };
+    }
   }
   if (!input.trim()) return null;
   try {
@@ -178,9 +181,22 @@ function stateDetails(input) {
   };
 }
 
+const EVENT_LOG_MAX_BYTES = Number(process.env.CLAUDE_PET_EVENT_LOG_MAX_BYTES ?? 4194304);
+const STDIN_MAX_BYTES = 1024 * 1024;
+
+async function rotateEventLog(logPath) {
+  const stats = await stat(logPath);
+  if (stats.size > EVENT_LOG_MAX_BYTES) {
+    await rename(logPath, logPath + ".1");
+  }
+}
+
 async function appendHookEvent(payload) {
   const logPath = join(companionDir(), "runtime", "hook-events.jsonl");
   await mkdir(dirname(logPath), { recursive: true });
+  await rotateEventLog(logPath).catch((error) => {
+    if (error?.code !== "ENOENT") throw error;
+  });
   await appendFile(logPath, `${JSON.stringify(payload)}\n`, "utf8");
 }
 
