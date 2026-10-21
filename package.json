@@ -9,6 +9,7 @@
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "install-hooks": "node scripts/install-hooks.mjs",
+    "verify-install-hooks": "node scripts/verify-install-hooks.mjs",
     "uninstall-hooks": "node scripts/uninstall-hooks.mjs",
     "hook": "node hook/claude-pet-hook.mjs"
   },

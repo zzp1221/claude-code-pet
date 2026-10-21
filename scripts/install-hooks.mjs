@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { access, copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, readdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 const home = process.env.USERPROFILE || process.env.HOME;
@@ -13,6 +13,17 @@ const hookScript = join(companionDir, "hook", "claude-pet-hook.mjs");
 const stableExe = join(companionDir, "bin", "claude-pet-companion.exe");
 const releaseExe = join(process.cwd(), "src-tauri", "target", "release", "claude-pet-companion.exe");
 const nodeExe = process.execPath;
+
+const BACKUP_PREFIX = "settings.pet-companion.";
+const DEFAULT_BACKUP_KEEP = 5;
+// A negative or fractional value used to sail straight through: -3 removed every
+// backup including the one written moments earlier, which is the exact copy this
+// change exists to preserve. Keep at least one.
+const parsedBackupKeep = Number(process.env.PET_BACKUP_KEEP);
+const backupKeep =
+  Number.isInteger(parsedBackupKeep) && parsedBackupKeep >= 1
+    ? parsedBackupKeep
+    : DEFAULT_BACKUP_KEEP;
 
 const EVENT_MAP = [
   ["SessionStart", "idle", "session-start", 0],
@@ -77,30 +88,97 @@ function normalizeEventHooks(settings, eventName) {
   return settings.hooks[eventName];
 }
 
-function withoutExistingPetHook(hooks) {
-  return hooks.filter((entry) => {
-    const hook = entry?.hooks?.[0] ?? entry;
-    const command = hook?.command ?? "";
-    const args = Array.isArray(hook?.args) ? hook.args.join(" ") : "";
-    const text = `${command} ${args}`;
-    return !text.includes("claude-pet-hook.mjs") && !text.includes("claude-pet-companion");
-  });
+function referencesPet(hook) {
+  const command = hook?.command ?? "";
+  const args = Array.isArray(hook?.args) ? hook.args.join(" ") : "";
+  const text = `${command} ${args}`;
+  return text.includes("claude-pet-hook.mjs") || text.includes("claude-pet-companion");
+}
+
+function withoutExistingPetHook(entries) {
+  const result = [];
+  for (const entry of entries) {
+    if (!Array.isArray(entry?.hooks)) {
+      if (!referencesPet(entry)) result.push(entry);
+      continue;
+    }
+    // Strip only the pet entries so hooks the user added to the same matcher
+    // survive a reinstall.
+    const kept = entry.hooks.filter((hook) => !referencesPet(hook));
+    if (kept.length === entry.hooks.length) {
+      result.push(entry);
+    } else if (kept.length > 0) {
+      result.push({ ...entry, hooks: kept });
+    }
+  }
+  return result;
+}
+
+async function readSettingsFile(path) {
+  let text;
+  try {
+    text = await readFile(path, "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT") return {};
+    throw error;
+  }
+  if (!text.trim()) return {};
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    // Never echo error.message. It is a V8 implementation detail that has
+    // carried snippets of the offending input in other runtimes, and
+    // settings.json legitimately holds tokens and hook commands.
+    const position = Number.isInteger(error?.position) ? ` at position ${error.position}` : "";
+    throw new Error(
+      `Cannot parse ${path}${position}. ` +
+        "A backup copy was written before parsing; restore it, fix the JSON, and run the installer again."
+    );
+  }
+}
+
+async function backupSettings(path, dir, stamp) {
+  await mkdir(dir, { recursive: true });
+  const target = join(dir, `${BACKUP_PREFIX}${stamp}.json`);
+  try {
+    await copyFile(path, target);
+    return target;
+  } catch (error) {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+async function pruneBackups(dir, limit) {
+  const requested = Math.floor(Number(limit));
+  const keep = Number.isFinite(requested) && requested >= 1 ? requested : DEFAULT_BACKUP_KEEP;
+  const entries = await readdir(dir).catch(() => []);
+  const backups = entries
+    .filter((name) => name.startsWith(BACKUP_PREFIX) && name.endsWith(".json"))
+    .sort();
+  const stale = backups.slice(0, Math.max(0, backups.length - keep));
+  for (const name of stale) {
+    await unlink(join(dir, name)).catch(() => {});
+  }
+  return { removed: stale.length, kept: Math.min(backups.length, keep) };
 }
 
 async function main() {
-  await mkdir(backupDir, { recursive: true });
   await mkdir(join(companionDir, "runtime"), { recursive: true });
   await mkdir(join(companionDir, "pets"), { recursive: true });
 
-  const text = await readFile(settingsPath, "utf8").catch(() => "{}");
-  const settings = JSON.parse(text || "{}");
+  // Back up before parsing: a hand-edited settings.json that no longer parses
+  // must still leave the user a copy of what they had.
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  await copyFile(settingsPath, join(backupDir, `settings.pet-companion.${stamp}.json`)).catch(() => {});
+  const backupPath = await backupSettings(settingsPath, backupDir, stamp);
+  const settings = await readSettingsFile(settingsPath);
+
+  // Probing for the binary touches the filesystem twice per event; do it once.
+  const exePath = await findHookExe();
 
   for (const [eventName, state, event, ttlMs] of EVENT_MAP) {
     const hooks = normalizeEventHooks(settings, eventName);
     const filtered = withoutExistingPetHook(hooks);
-    const exePath = await findHookExe();
     filtered.push({
       matcher: "",
       hooks: [
@@ -130,8 +208,13 @@ async function main() {
     "utf8"
   );
 
+  const pruned = await pruneBackups(backupDir, backupKeep);
+
   console.log(`Installed Claude Pet Companion hooks for ${EVENT_MAP.length} events.`);
-  console.log(`Backup written under ${backupDir}.`);
+  if (backupPath) console.log(`Settings backup written to ${backupPath}.`);
+  if (pruned.removed > 0) {
+    console.log(`Removed ${pruned.removed} old backup(s); keeping the newest ${pruned.kept}.`);
+  }
 }
 
 main().catch((error) => {
