@@ -34,9 +34,15 @@ export function PetCanvas({ imageUrl, state, scale }: PetCanvasProps) {
     image.onload = () => {
       imageRef.current = image;
     };
+    // A missing or corrupt spritesheet used to leave the canvas blank with no
+    // signal at all; clear the reference so the caller can show a placeholder.
+    image.onerror = () => {
+      imageRef.current = null;
+    };
     image.src = imageUrl;
     return () => {
       image.onload = null;
+      image.onerror = null;
     };
   }, [imageUrl]);
 
@@ -77,7 +83,9 @@ export function PetCanvas({ imageUrl, state, scale }: PetCanvasProps) {
 
     raf = window.requestAnimationFrame(draw);
     return () => window.cancelAnimationFrame(raf);
-  }, [scale]);
+    // The loop reads scale through the canvas size, so restarting it on every
+    // scale change only threw away the accumulated frame timing.
+  }, []);
 
   return (
     <canvas

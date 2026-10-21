@@ -28,13 +28,25 @@ export const frameCountByState: Record<PetState, number> = {
   review: 6
 };
 
+const STATE_ALIASES: Record<string, PetState> = {
+  permission: "waiting",
+  notification: "waiting",
+  error: "failed",
+  denied: "failed",
+  done: "review",
+  stop: "review"
+};
+
+const KNOWN_STATES = new Set(Object.keys(rowByState));
+
+function isPetState(value: string): value is PetState {
+  return KNOWN_STATES.has(value);
+}
+
 export function normalizeState(state: string | undefined): PetState {
   if (!state) return "idle";
-  if (state in rowByState) return state as PetState;
-  if (state === "permission" || state === "notification") return "waiting";
-  if (state === "error" || state === "denied") return "failed";
-  if (state === "done" || state === "stop") return "review";
-  return "idle";
+  if (isPetState(state)) return state;
+  return STATE_ALIASES[state] ?? "idle";
 }
 
 export function nextFrameDelay(state: PetState): number {
