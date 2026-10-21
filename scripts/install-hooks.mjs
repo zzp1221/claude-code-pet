@@ -126,8 +126,12 @@ async function readSettingsFile(path) {
   try {
     return JSON.parse(text);
   } catch (error) {
+    // Never echo error.message. It is a V8 implementation detail that has
+    // carried snippets of the offending input in other runtimes, and
+    // settings.json legitimately holds tokens and hook commands.
+    const position = Number.isInteger(error?.position) ? ` at position ${error.position}` : "";
     throw new Error(
-      `Cannot parse ${path}: ${error.message}. ` +
+      `Cannot parse ${path}${position}. ` +
         "A backup copy was written before parsing; restore it, fix the JSON, and run the installer again."
     );
   }

@@ -176,6 +176,102 @@ const results = [];
   ]);
 }
 
+
+// A missing file and a whitespace-only file must both produce a fresh settings
+// document rather than throwing.
+{
+  const missingHome = await freshHome();
+  const missingResult = await invoke(missingHome);
+  const missingSettings = JSON.parse(
+    await readFile(join(missingHome, ".claude", "settings.json"), "utf8")
+  );
+  results.push([
+    "missing settings file",
+    missingResult.code === 0 && Object.keys(missingSettings.hooks ?? {}).length === 19,
+    `code=${missingResult.code} events=${Object.keys(missingSettings.hooks ?? {}).length}`
+  ]);
+
+  const blankHome = await freshHome();
+  const blankPath = join(blankHome, ".claude", "settings.json");
+  await writeFile(blankPath, "   \n\t\n", "utf8");
+  const blankResult = await invoke(blankHome);
+  const blankSettings = JSON.parse(await readFile(blankPath, "utf8"));
+  results.push([
+    "whitespace-only settings file",
+    blankResult.code === 0 && Object.keys(blankSettings.hooks ?? {}).length === 19,
+    `code=${blankResult.code} events=${Object.keys(blankSettings.hooks ?? {}).length}`
+  ]);
+}
+
+// A bare pet entry has no hooks array; it must be removed, and a bare user entry
+// beside it must survive.
+{
+  const home = await freshHome();
+  const path = join(home, ".claude", "settings.json");
+  await writeFile(
+    path,
+    JSON.stringify(
+      {
+        hooks: {
+          PreToolUse: [
+            { type: "command", command: "echo bare-user" },
+            { type: "command", command: "node /elsewhere/claude-pet-hook.mjs" }
+          ]
+        }
+      },
+      null,
+      2
+    ),
+    "utf8"
+  );
+  const result = await invoke(home);
+  const settings = JSON.parse(await readFile(path, "utf8"));
+  const flat = settings.hooks.PreToolUse.flatMap((entry) => entry.hooks ?? [entry]);
+  const bareUserKept = flat.some((hook) => textOf(hook).includes("echo bare-user"));
+  const petHooks = flat.filter((hook) => textOf(hook).includes("claude-pet")).length;
+  results.push([
+    "bare pet entry removed, bare user entry kept",
+    result.code === 0 && bareUserKept && petHooks === 1,
+    `code=${result.code} bareUserKept=${bareUserKept} petHooks=${petHooks}`
+  ]);
+}
+
+// The parse error is shown to a terminal; it must not carry file contents.
+{
+  const home = await freshHome();
+  const path = join(home, ".claude", "settings.json");
+  await writeFile(path, '{"env":{"TOKEN":"sk-LEAKCANARY"},', "utf8");
+  const result = await invoke(home);
+  const namesFile = result.out.includes("settings.json");
+  results.push([
+    "parse error does not echo file contents",
+    result.code !== 0 && !result.out.includes("sk-LEAKCANARY") && namesFile,
+    `code=${result.code} leaks=${result.out.includes("sk-LEAKCANARY")} namesFile=${namesFile}`
+  ]);
+}
+
+// Every retention boundary the guard is supposed to reject.
+{
+  const cases = ["0", "-1", "2.9", "abc", "Infinity", "2", "1e9"];
+  const observed = [];
+  for (const value of cases) {
+    const home = await freshHome();
+    await writeFile(join(home, ".claude", "settings.json"), "{}\n", "utf8");
+    for (let index = 0; index < 4; index += 1) await invoke(home);
+    await invoke(home, { PET_BACKUP_KEEP: value });
+    const count = (await readdir(join(home, ".claude", "backups"))).filter((name) =>
+      name.endsWith(".json")
+    ).length;
+    observed.push([value, count]);
+  }
+  const ok = observed.every(([value, count]) => (value === "2" ? count === 2 : count === 5));
+  results.push([
+    "PET_BACKUP_KEEP boundaries",
+    ok,
+    observed.map(([value, count]) => `${value}=${count}`).join(" ")
+  ]);
+}
+
 let failed = 0;
 for (const [name, ok, detail] of results) {
   if (!ok) failed += 1;
