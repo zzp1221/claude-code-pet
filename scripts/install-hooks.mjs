@@ -16,7 +16,14 @@ const nodeExe = process.execPath;
 
 const BACKUP_PREFIX = "settings.pet-companion.";
 const DEFAULT_BACKUP_KEEP = 5;
-const backupKeep = Number(process.env.PET_BACKUP_KEEP) || DEFAULT_BACKUP_KEEP;
+// A negative or fractional value used to sail straight through: -3 removed every
+// backup including the one written moments earlier, which is the exact copy this
+// change exists to preserve. Keep at least one.
+const parsedBackupKeep = Number(process.env.PET_BACKUP_KEEP);
+const backupKeep =
+  Number.isInteger(parsedBackupKeep) && parsedBackupKeep >= 1
+    ? parsedBackupKeep
+    : DEFAULT_BACKUP_KEEP;
 
 const EVENT_MAP = [
   ["SessionStart", "idle", "session-start", 0],
@@ -138,7 +145,9 @@ async function backupSettings(path, dir, stamp) {
   }
 }
 
-async function pruneBackups(dir, keep) {
+async function pruneBackups(dir, limit) {
+  const requested = Math.floor(Number(limit));
+  const keep = Number.isFinite(requested) && requested >= 1 ? requested : DEFAULT_BACKUP_KEEP;
   const entries = await readdir(dir).catch(() => []);
   const backups = entries
     .filter((name) => name.startsWith(BACKUP_PREFIX) && name.endsWith(".json"))

@@ -1,0 +1,12 @@
+Reject a non-positive PET_BACKUP_KEEP so pruning cannot wipe the safety copy
+
+PRAgent flagged this on the previous commit: Number(process.env.PET_BACKUP_KEEP)
+passes a negative value straight through, and pruneBackups then computes
+slice(0, length - (-3)), which removes every backup including the one written
+seconds earlier by the reorder this branch is about.
+
+- accept only integers >= 1, falling back to the default otherwise
+- clamp the same bound inside pruneBackups so a caller cannot reintroduce it
+- cover the remaining withoutExistingPetHook branches: a bare hook entry must
+  survive, and an entry made entirely of pet hooks must be replaced
+- assert that PET_BACKUP_KEEP=-1 leaves the backups in place

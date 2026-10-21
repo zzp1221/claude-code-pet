@@ -17,10 +17,10 @@ async function freshHome() {
   return dir;
 }
 
-async function invoke(home) {
+async function invoke(home, extraEnv = {}) {
   try {
     const { stdout, stderr } = await run(process.execPath, [installer], {
-      env: { ...process.env, USERPROFILE: home, HOME: home }
+      env: { ...process.env, ...extraEnv, USERPROFILE: home, HOME: home }
     });
     return { code: 0, out: stdout + stderr };
   } catch (error) {
@@ -118,6 +118,62 @@ const results = [];
     name.endsWith(".json")
   );
   results.push(["backups are pruned", backups.length === 5, `kept=${backups.length}`]);
+}
+
+// A bare hook entry (no hooks array) must survive, and an entry made purely of
+// pet hooks must be removed rather than kept alongside the new one.
+{
+  const home = await freshHome();
+  const path = join(home, ".claude", "settings.json");
+  await writeFile(
+    path,
+    JSON.stringify(
+      {
+        hooks: {
+          PreToolUse: [
+            { type: "command", command: "echo bare-user-hook" },
+            { matcher: "", hooks: [{ type: "command", command: "node /elsewhere/claude-pet-hook.mjs" }] }
+          ]
+        }
+      },
+      null,
+      2
+    ),
+    "utf8"
+  );
+  const result = await invoke(home);
+  const settings = JSON.parse(await readFile(path, "utf8"));
+  const entries = settings.hooks.PreToolUse;
+  const flat = entries.flatMap((entry) => entry.hooks ?? [entry]);
+  const bareKept = flat.some((hook) => textOf(hook).includes("echo bare-user-hook"));
+  const petEntries = entries.filter(
+    (entry) => Array.isArray(entry.hooks) && entry.hooks.every((hook) => textOf(hook).includes("claude-pet"))
+  );
+  results.push([
+    "bare hook survives, all-pet entry replaced",
+    result.code === 0 && bareKept && petEntries.length === 1,
+    `code=${result.code} bareKept=${bareKept} petEntries=${petEntries.length}`
+  ]);
+}
+
+// A negative PET_BACKUP_KEEP used to wipe every backup, including the one
+// written moments before. It must fall back to the default instead.
+{
+  const home = await freshHome();
+  await writeFile(join(home, ".claude", "settings.json"), "{}\n", "utf8");
+  for (let index = 0; index < 3; index += 1) await invoke(home);
+  const before = (await readdir(join(home, ".claude", "backups"))).filter((name) =>
+    name.endsWith(".json")
+  ).length;
+  await invoke(home, { PET_BACKUP_KEEP: "-1" });
+  const after = (await readdir(join(home, ".claude", "backups"))).filter((name) =>
+    name.endsWith(".json")
+  ).length;
+  results.push([
+    "negative PET_BACKUP_KEEP keeps backups",
+    before === 3 && after >= 4,
+    `before=${before} after=${after}`
+  ]);
 }
 
 let failed = 0;
